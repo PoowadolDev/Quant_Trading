@@ -1,0 +1,17 @@
+literature_search_arxiv — User Notification Record
+Timestamp (UTC): 2026-07-13
+
+NOTIFICATION TEXT PRESENTED TO USER:
+
+  Notice - arXiv API Terms of Use
+
+  This skill retrieves data from the arXiv API. You must review the terms at
+  https://info.arxiv.org/help/api/index.html
+
+  Papers on arXiv carry individual licenses (arXiv perpetual license, CC-BY,
+  CC-BY-NC-SA, CC0, etc.) which vary per paper. Always check the license of any
+  specific paper before reusing, redistributing, or deriving work from it.
+  Retrieval through this skill grants no rights beyond what each paper's own
+  license allows.
+
+Rate limit enforced by skill scripts: max 1 request / 3 seconds.
