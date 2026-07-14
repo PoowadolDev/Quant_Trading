@@ -49,6 +49,13 @@ reading, collect:
   the methods/experiments — these feed the report's tables.
 - The references the paper leans on most (cited repeatedly or credited as the
   foundation of the method).
+- **Every formula/equation central to the method or results** (loss
+  functions, pricing/return formulas, statistical tests, algorithm update
+  rules, etc.). Never drop or paraphrase a formula away — carry the exact
+  math forward to Step 3. If the paper works a numeric example through the
+  formula, capture those numbers too; if it doesn't, prepare your own
+  worked example using representative numbers so the formula isn't left
+  abstract.
 
 If a bibliographic field genuinely is not in the paper (institutions are
 sometimes omitted from preprints), write `Not stated in paper` — never guess.
@@ -84,6 +91,15 @@ names, and headline numbers inside each point so the section is skimmable.]
 
 1. [First point...]
 2. [Second point...]
+
+**Formulas: mandatory, never omitted.** If the point being described involves
+a formula/equation in the paper, the formula MUST appear in that numbered
+point — in LaTeX (`$...$` inline or `$$...$$` block), exactly as derived in
+the paper, with every symbol defined. Immediately follow it with a worked
+example: plug in concrete numbers (from the paper if it gives any, otherwise
+representative numbers you choose) and show the resulting value. Never
+summarize a formula in prose only ("the return is calculated based on price
+difference") — write the actual equation and compute it once.
 
 ## 3. Key Importance Topics
 
@@ -154,6 +170,9 @@ rather than dropping it — the fixed structure is the point.
 
 - Every section 1–6 present, in order, with the exact headings above.
 - Every topic in section 3 has a **Why it matters** line.
+- Every formula found in the paper's methods/results is present in section 2
+  verbatim (LaTeX), with a worked numeric example — none dropped or reduced
+  to prose-only description.
 - All table content comes from the paper text — no invented tools, datasets,
   or references.
 - Footer has real date and correct path.
