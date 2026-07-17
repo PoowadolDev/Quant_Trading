@@ -7,8 +7,8 @@ description: >
   like "summarize this paper", "digest the paper", "read this PDF and give me
   the key points", or after downloading a paper with a literature_search
   skill. Extracts full text with a bundled Python script, then produces a
-  fixed-format digest covering summary, key topics, development ideas, tools &
-  data used, and key references.
+  fixed-format digest covering summary, key topics, step-by-step algorithm
+  logic, development ideas, tools & data used, and key references.
 ---
 
 # Digest Research Paper
@@ -36,7 +36,8 @@ text — tell the user and stop; do not fabricate a digest.
 ### Step 2 — Read the full text
 
 Read **every** chunk file, in order. Do not digest from the abstract alone —
-Sections 3–5 of the report (topics, ideas, tools & data) require the methods,
+Sections 3–6 of the report (topics, algorithm logic, ideas, tools & data)
+require the methods,
 results, and bibliography sections, which live deep in the paper. While
 reading, collect:
 
@@ -49,6 +50,10 @@ reading, collect:
   the methods/experiments — these feed the report's tables.
 - The references the paper leans on most (cited repeatedly or credited as the
   foundation of the method).
+- **The complete logic of every algorithm/method the paper proposes or
+  relies on** — its inputs, each processing step in order, the decision
+  rules, and its outputs. Capture enough detail to re-explain the algorithm
+  step by step in Section 4 without going back to the paper.
 - **Every formula/equation central to the method or results** (loss
   functions, pricing/return formulas, statistical tests, algorithm update
   rules, etc.). Never drop or paraphrase a formula away — carry the exact
@@ -112,16 +117,44 @@ not just restate the topic.]
 ### [Next topic...]
 [3–6 topics total, drawn from the paper's actual contributions.]
 
-## 4. Ideas for Development
+## 4. Algorithm Logic — Step-by-Step
+
+[One subsection per core algorithm/method in the paper. Explain the logic
+step by step, in plain language a reader new to the topic can follow —
+never assume the reader has read the paper. Each algorithm gets:]
+
+### [Algorithm/Method name]
+
+**Goal:** [one sentence — what problem this algorithm solves.]
+
+**Inputs:** [what goes in.] **Outputs:** [what comes out.]
+
+**Steps:**
+
+1. **[Step name]** — [what happens in this step and *why*, in plain
+   language. If the step uses a formula, show it in LaTeX with symbols
+   defined.]
+2. [Next step...]
+
+**Worked example:** [Walk the full algorithm once end-to-end with concrete
+numbers — from the paper if it gives any, otherwise representative numbers
+you choose. Show the intermediate value after each step so the reader can
+follow along and check their understanding. This example is mandatory for
+every algorithm — never leave the steps abstract.]
+
+## 5. Ideas for Development
 
 [Bulleted list. Each idea must be standalone — usable on its own without
 depending on the other ideas or requiring them in sequence. Each one takes a
 specific element of the paper and says how it could be applied or extended
-elsewhere. 3–6 ideas.]
+elsewhere. Where an idea builds on an algorithm explained in Section 4,
+say so explicitly — name the algorithm and which of its steps the idea
+modifies, extends, or reuses. 3–6 ideas.]
 
-- **[Idea name]** — [what to take from the paper and where to apply it]
+- **[Idea name]** — [what to take from the paper and where to apply it;
+  reference the Section 4 algorithm/step it builds on, when applicable]
 
-## 5. Tools & Data Used in This Research
+## 6. Tools & Data Used in This Research
 
 ### Software & Library
 
@@ -141,7 +174,7 @@ elsewhere. 3–6 ideas.]
 |---|---|
 | ... | ... |
 
-## 6. Key References Worth Exploring
+## 7. Key References Worth Exploring
 
 | Reference | Relevance |
 |---|---|
@@ -168,8 +201,13 @@ rather than dropping it — the fixed structure is the point.
 
 ### Step 4 — Verify before finishing
 
-- Every section 1–6 present, in order, with the exact headings above.
+- Every section 1–7 present, in order, with the exact headings above.
 - Every topic in section 3 has a **Why it matters** line.
+- Every core algorithm/method in the paper has a section 4 subsection with
+  Goal, Inputs/Outputs, numbered steps, and a worked end-to-end example
+  with intermediate values — none left abstract.
+- Every section 5 idea that builds on an algorithm names the section 4
+  algorithm/step it relates to.
 - Every formula found in the paper's methods/results is present in section 2
   verbatim (LaTeX), with a worked numeric example — none dropped or reduced
   to prose-only description.

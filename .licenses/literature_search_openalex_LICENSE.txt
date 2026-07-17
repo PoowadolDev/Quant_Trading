@@ -1,0 +1,3 @@
+OpenAlex API usage notice
+Timestamp: 2026-07-15
+User notified: check terms at https://developers.openalex.org/ and verify individual paper licenses (OA status varies) before reuse/redistribution.

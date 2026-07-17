@@ -41,3 +41,5 @@ Thumbs.db
 
 # Claude Code local state
 .claude/settings.local.json
+
+binance_cache/
