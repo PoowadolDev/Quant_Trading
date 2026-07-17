@@ -50,6 +50,11 @@ reading, collect:
   the methods/experiments — these feed the report's tables.
 - The references the paper leans on most (cited repeatedly or credited as the
   foundation of the method).
+- **Condition-dependence evidence** for Section 5's Strong/Weak analysis:
+  every statement about when the method works well or poorly (market regime,
+  data scale, noise level, parameter sensitivity), where it appears (results
+  breakdown, limitation section, ablation), and the formulas whose terms
+  reveal failure modes (e.g. a term that grows with volatility or drift).
 - **The complete logic of every algorithm/method the paper proposes or
   relies on** — its inputs, each processing step in order, the decision
   rules, and its outputs. Capture enough detail to re-explain the algorithm
@@ -153,6 +158,35 @@ modifies, extends, or reuses. 3–6 ideas.]
 
 - **[Idea name]** — [what to take from the paper and where to apply it;
   reference the Section 4 algorithm/step it builds on, when applicable]
+  - **Strong:** [condition/regime/situation where the idea performs well,
+    e.g. "sideways market, low volatility"] — [one-line reason] *(From paper)*
+  - **Strong:** [another favorable condition, if any] — [reason] *(From AI)*
+  - **Weak:** [condition/regime/situation where the idea degrades or fails,
+    e.g. "trending market, high volatility"] — [one-line reason] *(From AI)*
+
+**Strong/Weak rules — mandatory for every idea:**
+
+- Every idea carries at least one **Strong** and at least one **Weak**
+  bullet. More than one of each is allowed and encouraged when the paper or
+  the math supports it — strengths and weaknesses are rarely singular.
+- Tag every Strong/Weak bullet with its source:
+  - *(From paper)* — the paper itself states or demonstrates it (results
+    table, limitation section, regime analysis). Point to the evidence:
+    section, experiment, or number.
+  - *(From AI)* — your own analysis, derived from the paper's formulas or
+    from provable math/statistics logic. Attach the one-line derivation,
+    e.g. "grid profit per cycle = level spacing − 2×fee, but a trend of
+    length > n·k exits the range with all lots underwater, so expected PnL
+    turns negative when |drift| exceeds the grid range". Reason from the
+    equations captured in Sections 2/4 whenever possible.
+- *(From AI)* points must be **provable** — grounded in a formula, a
+  statistical property (variance, drift, expectation, sample size), or a
+  scientific argument the reader can check. Never write unfalsifiable or
+  hand-wavy claims ("markets usually behave", "AI will make it better");
+  if a point cannot be argued from math/stats/science, drop it.
+- The same condition may appear tagged both ways when the paper states it
+  and your analysis extends it — keep the tags separate so the reader knows
+  which claims are the paper's and which are yours.
 
 ## 6. Tools & Data Used in This Research
 
@@ -208,6 +242,9 @@ rather than dropping it — the fixed structure is the point.
   with intermediate values — none left abstract.
 - Every section 5 idea that builds on an algorithm names the section 4
   algorithm/step it relates to.
+- Every section 5 idea has at least one **Strong** and one **Weak** bullet,
+  each tagged *(From paper)* or *(From AI)*; every *(From AI)* bullet
+  carries a checkable math/stats justification — no unprovable claims.
 - Every formula found in the paper's methods/results is present in section 2
   verbatim (LaTeX), with a worked numeric example — none dropped or reduced
   to prose-only description.

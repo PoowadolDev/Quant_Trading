@@ -18,6 +18,8 @@ env/
 *.key
 *.pem
 
+.impeccable/
+
 # Data & model artifacts
 *.csv
 *.parquet
