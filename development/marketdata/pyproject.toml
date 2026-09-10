@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marketdata"
+version = "0.1.0"
+description = "Fetch, store, inspect and validate OHLCV market data for forex and crypto."
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "pyarrow>=14",
+    "requests>=2.31",
+    "yfinance>=0.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+marketdata = "marketdata.cli:main"
+
+[tool.setuptools]
+packages = ["marketdata"]
