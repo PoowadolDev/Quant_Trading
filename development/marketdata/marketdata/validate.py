@@ -62,6 +62,7 @@ def validate_frame(
     df: pd.DataFrame,
     *,
     label: str = "",
+    asset_class: str = "forex",
     min_rows: int = 100,
     max_gap_pct: float | None = None,
     max_stale_run: int = 20,
@@ -125,11 +126,11 @@ def validate_frame(
     if len(high_overshoot):
         add(Issue(ERROR, "ohlc-high",
                   f"{len(high_overshoot)} bars where open or close exceeds the high "
-                  f"(worst {_price_gap(high_overshoot.max(), df)})"))
+                  f"(worst {_price_gap(high_overshoot.max(), df, asset_class)})"))
     if len(low_undershoot):
         add(Issue(ERROR, "ohlc-low",
                   f"{len(low_undershoot)} bars where open or close is below the low "
-                  f"(worst {_price_gap(low_undershoot.max(), df)})"))
+                  f"(worst {_price_gap(low_undershoot.max(), df, asset_class)})"))
     if inverted:
         add(Issue(ERROR, "ohlc-inverted", f"{inverted} bars where high is below low"))
 
@@ -165,12 +166,16 @@ def validate_frame(
     return report
 
 
-def _price_gap(magnitude: float, df: pd.DataFrame) -> str:
+def _price_gap(magnitude: float, df: pd.DataFrame, asset_class: str = "forex") -> str:
     """Describe a price discrepancy in the units a trader reads.
 
-    Forex-sized quotes are reported in pips so "0.000103" becomes "1.0 pip", which is the
-    difference between a rounding artefact and a broken bar.
+    Forex quotes are reported in pips so "0.000103" becomes "1.0 pip", which is the
+    difference between a rounding artefact and a broken bar. Only forex is converted:
+    crude at 102 dollars a barrel is forex-shaped by magnitude alone, and calling a
+    fifty-cent move "50 pips" would be nonsense.
     """
+    if asset_class != "forex":
+        return f"{magnitude:.6g}"
     level = float(pd.to_numeric(df["close"], errors="coerce").abs().median())
     if 0 < level < 500:                       # forex-shaped quote
         pips = magnitude * (100 if level > 50 else 10_000)   # JPY pairs quote to 0.01
@@ -194,5 +199,8 @@ def validate_selection(store: ParquetStore, selection: pd.DataFrame, **kwargs) -
     reports = []
     for _, row in selection.iterrows():
         df = ParquetStore.read_path(row["path"])
-        reports.append(validate_frame(df, label=series_label(row), **kwargs))
+        # The asset class decides how a price discrepancy is phrased, so it
+        # travels with the frame rather than being guessed from the magnitude.
+        reports.append(validate_frame(df, label=series_label(row),
+                                      asset_class=row["asset_class"], **kwargs))
     return reports

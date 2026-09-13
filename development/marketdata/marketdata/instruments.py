@@ -7,11 +7,23 @@ from typing import Iterable
 
 from .util import UserError
 
-ASSET_CLASSES = ("forex", "crypto")
+ASSET_CLASSES = ("forex", "crypto", "commodity")
 SOURCES = ("yahoo", "binance")
 
 #: Which feed to use when the caller does not name one.
-DEFAULT_SOURCE = {"forex": "yahoo", "crypto": "binance"}
+DEFAULT_SOURCE = {"forex": "yahoo", "crypto": "binance", "commodity": "yahoo"}
+
+#: Commodities have no natural ticker convention, so the canonical name is a plain
+#: word and the map holds the vendor symbol. Every entry is the front-month
+#: continuous futures contract, which rolls; see the note in to_source_symbol.
+COMMODITY_SYMBOLS = {
+    "GOLD": "GC=F",        # COMEX gold, USD per troy ounce
+    "SILVER": "SI=F",      # COMEX silver, USD per troy ounce
+    "COPPER": "HG=F",      # COMEX copper, USD per pound
+    "WTI": "CL=F",         # NYMEX light sweet crude, USD per barrel
+    "BRENT": "BZ=F",       # ICE Brent crude, USD per barrel
+    "NATGAS": "NG=F",      # NYMEX Henry Hub, USD per MMBtu
+}
 
 OHLCV = ["open", "high", "low", "close", "volume"]
 
@@ -20,7 +32,8 @@ OHLCV = ["open", "high", "low", "close", "volume"]
 class Instrument:
     """One series to fetch and store.
 
-    `symbol` is canonical and source-agnostic: "EURUSD" for forex, "BTC-USDT" for crypto.
+    `symbol` is canonical and source-agnostic: "EURUSD" for forex, "BTC-USDT" for
+    crypto, "GOLD" or "WTI" for commodities.
     `timeframe` uses Binance-style tokens (1m, 5m, 15m, 1h, 4h, 1d, 1w).
     """
 
@@ -59,12 +72,24 @@ def to_source_symbol(inst: Instrument) -> str:
     if inst.source == "yahoo":
         if inst.asset_class == "forex":
             return f"{inst.symbol}=X"            # EURUSD -> EURUSD=X
+        if inst.asset_class == "commodity":
+            # Yahoo has no spot commodity feed, so these are front-month futures.
+            # The series is continuous but not roll-adjusted: at each roll the
+            # level steps by the spread between contracts. Fine for a study of
+            # daily closes, wrong for anything that accumulates the jump.
+            try:
+                return COMMODITY_SYMBOLS[inst.symbol]
+            except KeyError:
+                raise UserError(
+                    f"unknown commodity {inst.symbol!r}; known: "
+                    f"{', '.join(sorted(COMMODITY_SYMBOLS))}"
+                ) from None
         return inst.symbol                        # BTC-USD stays as-is
     if inst.source == "binance":
         if inst.asset_class != "crypto":
             raise UserError(
                 f"Binance serves crypto only; {inst.symbol} is {inst.asset_class}. "
-                "Use --source yahoo for forex."
+                "Use --source yahoo for forex and commodities."
             )
         return inst.symbol.replace("-", "")        # BTC-USDT -> BTCUSDT
     raise UserError(f"unknown source {inst.source!r}")
@@ -74,6 +99,8 @@ FX_MAJORS = ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD
 FX_CROSSES = ["EURGBP", "EURJPY", "AUDNZD", "GBPJPY", "EURCHF"]
 FX_COMMODITY = ["AUDUSD", "USDCAD", "NZDUSD", "AUDNZD"]
 CRYPTO_MAJORS = ["BTC-USDT", "ETH-USDT"]
+METALS = ["GOLD", "SILVER", "COPPER"]
+ENERGY = ["WTI", "BRENT"]
 
 #: Named symbol sets, so a routine download does not need a hand-typed list.
 UNIVERSES: dict[str, dict] = {
@@ -101,6 +128,21 @@ UNIVERSES: dict[str, dict] = {
         "symbols": CRYPTO_MAJORS,
         "asset_class": "crypto",
         "description": "BTC and ETH against USDT",
+    },
+    "metals": {
+        "symbols": METALS,
+        "asset_class": "commodity",
+        "description": "Gold, silver and copper front-month futures",
+    },
+    "energy": {
+        "symbols": ENERGY,
+        "asset_class": "commodity",
+        "description": "WTI and Brent crude front-month futures",
+    },
+    "commodities": {
+        "symbols": METALS + ENERGY,
+        "asset_class": "commodity",
+        "description": "Metals and energy — the external anchors for FX pair studies",
     },
 }
 

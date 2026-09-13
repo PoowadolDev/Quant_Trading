@@ -131,8 +131,8 @@ marketdata validate -a crypto --json
 | Flag | Meaning |
 |---|---|
 | `-s, --symbols` | one symbol, a comma-separated list, or the flag repeated |
-| `-u, --universe` | `fx-majors`, `fx-crosses`, `fx-all`, `fx-commodity`, `crypto-majors` |
-| `-a, --asset-class` | `forex` or `crypto`; required with explicit symbols |
+| `-u, --universe` | `fx-majors`, `fx-crosses`, `fx-all`, `fx-commodity`, `crypto-majors`, `metals`, `energy`, `commodities` |
+| `-a, --asset-class` | `forex`, `crypto` or `commodity`; required with explicit symbols |
 | `--source` | `yahoo` or `binance`; defaults to yahoo for forex, binance for crypto |
 | `-t, --timeframe` | `1m 5m 15m 1h 4h 1d 1w`, default `1d` |
 
@@ -194,7 +194,11 @@ The path carries the metadata; the catalogue is rebuilt by scanning the tree. On
 source, so two feeds for the same instrument coexist and stay comparable.
 
 Symbols are canonical and source-agnostic — write `EURUSD`, not `EURUSD=X`; write
-`BTC-USDT`, not `BTCUSDT`. The mapper translates per feed.
+`BTC-USDT`, not `BTCUSDT`; write `GOLD`, not `GC=F`. The mapper translates per feed.
+
+Commodities are named in plain words: `GOLD`, `SILVER`, `COPPER`, `WTI`, `BRENT`,
+`NATGAS`. They are the external anchors for FX pair studies — the thing a commodity
+currency is supposed to track.
 
 ## Data quality — known defects
 
@@ -246,6 +250,25 @@ Daily FX sits near 28% because weekends are 2/7 of the week. Crypto should be ne
 marketdata validate -a forex  --max-gap-pct 35
 marketdata validate -a crypto --max-gap-pct 1
 ```
+
+### Commodities are front-month futures, and they roll
+
+Yahoo has no spot commodity feed, so `GOLD` is `GC=F` and `WTI` is `CL=F` — the
+front-month contract. The series is continuous but **not roll-adjusted**: at each roll
+the level steps by the spread between contracts. Acceptable for a study of daily closes;
+wrong for anything that accumulates the jump as if it were a return.
+
+### WTI went negative in April 2020
+
+```
+WTI 2020-04-20   open 17.73   high 17.85   low -40.32   close -37.63
+WTI 2020-04-21   open -14.00  high 13.86   low -16.74   close  10.01
+```
+
+This is real history, not a bad print, and `validate` reports it as `4 prices at or
+below zero`. Any log-price work — correlation, cointegration, spread construction — is
+impossible across those dates. Use `BRENT`, which never went negative, or start the
+window after 2020-05-01. Say which was chosen and why.
 
 ### USDT is not USD
 

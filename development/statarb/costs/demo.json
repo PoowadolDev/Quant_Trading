@@ -1,0 +1,34 @@
+{
+  "broker": "demo",
+  "updated": "2026-09-13T07:01:54Z",
+  "symbols": {
+    "USDNOK": {
+      "symbol": "USDNOK",
+      "asset_class": "forex",
+      "spread_pips": 30.0,
+      "commission_bps": 0.0,
+      "swap_long": -6.2,
+      "swap_short": 1.1,
+      "swap_unit": "points-per-lot",
+      "session_widening": 1.0,
+      "rollover_widening": 1.0,
+      "price": 9.276700019836426,
+      "estimated": true,
+      "updated": "2026-09-13T07:01:44Z"
+    },
+    "USDZAR": {
+      "symbol": "USDZAR",
+      "asset_class": "forex",
+      "spread_pips": 120.0,
+      "commission_bps": 0.0,
+      "swap_long": -35.0,
+      "swap_short": 12.0,
+      "swap_unit": "points-per-lot",
+      "session_widening": 1.0,
+      "rollover_widening": 1.0,
+      "price": 16.10379981994629,
+      "estimated": true,
+      "updated": "2026-09-13T07:01:54Z"
+    }
+  }
+}
