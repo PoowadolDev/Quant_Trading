@@ -12,10 +12,10 @@ whether anything found was real, and it is expected to reject rather than confir
 | Order | Script | Why here | State |
 |---|---|---|---|
 | 1 | `multiple_testing.py` | the only Step 4 question answerable **now**, on the screen's own output | ✅ built |
-| 2 | `deflated_sharpe.py` | a Sharpe ratio adjusted for how many things were tried to find it | ⬜ |
-| 3 | `overfit.py` | probability of backtest overfitting, by combinatorially symmetric cross-validation | ⬜ |
-| 4 | `purged_cv.py` | k-fold that does not leak when labels overlap in time | ⬜ |
-| 5 | `verify_validation.py` | none of the above is trustworthy unverified | ✅ 49 checks green |
+| 2 | `deflated_sharpe.py` | a Sharpe ratio adjusted for how many things were tried to find it | ✅ built |
+| 3 | `overfit.py` | probability of backtest overfitting, by combinatorially symmetric cross-validation | ✅ built |
+| 4 | `purged_cv.py` | k-fold that does not leak when labels overlap in time | ✅ built |
+| 5 | `verify_validation.py` | none of the above is trustworthy unverified | ✅ 100 checks green |
 | 6 | `track_record.py` | how long paper trading must run before it means anything | ⬜ deferred |
 
 **Step 4 does not need a candidate to be built or verified**, for the same reason Step 3
@@ -191,6 +191,36 @@ The checks that matter:
   `research/paper/validation/2608.23808` found a composite has no forward relationship, and
   the temptation to build one is strong enough to be worth a failing test.
 - **dependency direction** — Steps 1 to 3 must not import Step 4.
+
+## What scripts 2 to 4 found, 2026-09-16
+
+See [worklog/2026-09-16-step4-gates.md](../worklog/2026-09-16-step4-gates.md).
+
+Every candidate through every gate:
+
+| pair | Sharpe | PSR | DSR | trials | PBO |
+|---|---|---|---|---|---|
+| `NUE~STLD` | +0.085 | 80.5% | **3.5%** | 78 | 35.7% |
+| `RSG~WM` | −0.023 | 42.0% | **4.1%** | 79 | **76.6%** |
+| `KEY~ZION` | −0.019 | 42.7% | **26.0%** | 80 | **66.7%** |
+| `XLP~XLB` | +0.054 | 68.6% | **0.0%** | 81 | 34.9% |
+
+`NUE~STLD` is what deflation is for: a probabilistic Sharpe of 80.5% that reads as a
+reasonable result on its own, and a deflated Sharpe of 3.5% once charged for the
+seventy-eight configurations tried to find it. The best of seventy-eight trials reaches
+0.264 on noise; this reached 0.085.
+
+**Nothing passes, and the four failures are for four different reasons** — out-of-window
+cointegration, deflation, overfitting, and a negative realised mean. There is no single weak
+link to strengthen.
+
+Three defects the scripts found in themselves: a trial count of 1,464 where the real figure
+was 78 (per-pair dumps counted as trials); a `--plant-leak` flag in `purged_cv.py` that could
+not do what it claimed, because it planted a within-row leak and purging removes cross-fold
+overlap; and purging turning out to be a 0.6% no-op at the default horizon, which the script
+now reports as `NOT TESTED` rather than as `NO LEAKAGE`.
+
+---
 
 ## 6. `track_record.py` — deferred, with the reason
 

@@ -36,6 +36,10 @@ with one set of parameters, and the row in `logs/` that points at it.
 | Where can it be entered at all? | `code/thresholds.py` |
 | How many bets does this book hold? | `code/risk.py` |
 | How much should be held? | `code/sizing.py` |
+| How many tests were really run? | `code/multiple_testing.py` |
+| Is this Sharpe worth the search behind it? | `code/deflated_sharpe.py` |
+| Was the winning parameter chosen, or lucky? | `code/overfit.py` |
+| Does the score survive purging? | `code/purged_cv.py` |
 | All three, on one page | `code/signal_report.py` |
 
 ## Running
@@ -77,7 +81,7 @@ honest count of them.
 | 1 | Cost model and backtest engine | ✅ built, 97 checks green |
 | 2 | Relationship engine and health monitor | ✅ built, 89 checks green |
 | 3 | Signal, risk, sizing | ✅ built, 188 checks green |
-| 4 | Validation | 🟡 started, 49 checks green |
+| 4 | Validation | ✅ built, 100 checks green |
 | 5–6 | Paper, live | ⬜ |
 | 7 | Other asset classes | ✅ done early — crypto, commodities and indices searched |
 

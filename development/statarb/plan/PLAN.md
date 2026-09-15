@@ -18,12 +18,12 @@ than on the previous step being finished.
 | 1 | Cost model + backtest engine — split in [STEP1.md](STEP1.md) | ✅ built, 97 checks green |
 | 2 | Relationship engine + health monitor — split in [STEP2.md](STEP2.md) | ✅ built, 89 checks green |
 | 3 | Signal, risk, sizing — split in [STEP3.md](STEP3.md) | ✅ built, 188 checks green |
-| 4 | Validation — split in [STEP4.md](STEP4.md) | 🟡 started, 49 checks green |
+| 4 | Validation — split in [STEP4.md](STEP4.md) | ✅ built, 100 checks green |
 | 5 | Paper execution | ⬜ |
 | 6 | Live, small size | ⬜ |
 | 7 | Port to crypto / equities | ✅ done early — crypto and indices already searched |
 
-**Machinery: finished and verified. Candidates: none.** 496 checks pass across five
+**Machinery: finished and verified. Candidates: none.** 547 checks pass across five
 verification suites, and the newest of them has been mutation-tested — twenty deliberate
 defects introduced one at a time, twenty caught. What is missing is not code, it is a
 relationship worth trading.
