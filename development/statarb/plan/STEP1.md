@@ -12,6 +12,9 @@
 > name beside a script shadows the standard library module of the same name, and
 > the first thing to break is `subprocess`, several imports away.
 >
+> **Audited twice.** The first pass found five defects; a later pass, after the health
+> gate was wired in, found none. Details below.
+>
 > **Audited 2026-09-13.** Five more defects found and fixed, all in trade
 > accounting rather than in the totals: a long-to-short flip was booked as one
 > continuous trade, a position still open at the last bar was left unattributed,
@@ -30,14 +33,32 @@ of engine code exists. Do not skip ahead to the fun part.
 
 | Sub-step | Script | Kills the idea? | State |
 |---|---|---|---|
-| 1a | `costs.py` — record what the broker actually charges | — | ✅ built, placeholder numbers |
-| 1b | `feasibility.py` — does the edge survive the carry? | **yes** | ✅ ALIVE both directions |
+| 1a | `costs.py` — record what the broker actually charges | — | ✅ four profiles on file, all estimated |
+| 1b | `feasibility.py` — does the edge survive the carry? | **yes** | ✅ |
 | 1c | `strategy.py` — the decision function, shared with live | — | ✅ |
-| 1d | `backtest.py` — replay bars, apply costs, report | — | ✅ |
-| 1e | `verify_backtest.py` — prove the engine is not lying | — | ✅ 77 checks green |
+| 1d | `backtest.py` — replay bars, apply costs, report | — | ✅ plus `--health-gate` |
+| 1e | `verify_backtest.py` — prove the engine is not lying | — | ✅ 87 checks green |
 
-The candidate under test is `USDNOK ~ USDZAR`, hedge ratio about +0.77, half-life 5 to 7
-bars on daily data. Trial 23 in `logs/trials.csv` is the reference fit.
+Cost profiles recorded so far, every one marked estimated because none came off a broker
+contract sheet:
+
+| Profile | Covers | Shape of the bill |
+|---|---|---|
+| `fxretail` | 15 forex pairs | spread in pips, financing as a 1%/yr markup both ways |
+| `binance` | 10 crypto pairs | 10 bps taker per fill, 3 bps a night to borrow the short leg |
+| `etf` | SPY, DIA, QQQ, IWM | 1 bps spread, margin at 6%/yr long, 0.5%/yr borrow short |
+| `demo` | USDNOK, USDZAR | the first placeholder, kept for comparison |
+
+**The candidate this file was written for is dead.** `USDNOK ~ USDZAR` backtests at −285
+bps with gross already negative, and Step 2 later rejected it: cointegrated at p = 0.007
+on the full sample and p = 0.410 on the held-out tail. Every other candidate tried since
+has failed too — see the search table in `PLAN.md`.
+
+What survived is the machinery. `backtest.py` now also takes `--health-gate`, which hands
+control of exposure to the Step 2 monitor: flat while broken, no new entries while
+degraded, and it can only ever reduce exposure. Measured across twelve pairs the gate
+improved six of them with a median change of −11 bps, which is not evidence that it helps;
+its value so far is diagnostic rather than as a filter.
 
 ---
 

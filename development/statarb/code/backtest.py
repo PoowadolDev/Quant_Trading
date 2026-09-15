@@ -72,9 +72,27 @@ class Result:
     exposure_bars: int
 
 
+def health_states(prices: pd.DataFrame, *, lookback: int, every: int,
+                  thresholds: dict) -> np.ndarray:
+    """The monitor's verdict at every bar, judged only on bars available then.
+
+    Cycles run every `every` bars and the verdict holds until the next one, so a
+    bar is never scored with information it could not have had. Bars before the
+    first full lookback have no verdict and are treated as unhealthy, which keeps
+    the gate from trading a relationship it has not yet been able to assess.
+    """
+    import health as hm
+
+    states = np.array([hm.BROKEN] * len(prices), dtype=object)
+    for check in hm.replay(prices, lookback=lookback, every=every, **thresholds):
+        states[check.bar:] = check.state
+    return states
+
+
 def run_backtest(prices: pd.DataFrame, profile: dict, params: sig.SignalParams, *,
                  warmup: int, bars_per_night: float, signal_mode: str = "strategy",
-                 seed: int = 0, lag: int = 1, close_at_end: bool = True) -> Result:
+                 seed: int = 0, lag: int = 1, close_at_end: bool = True,
+                 health: np.ndarray | None = None) -> Result:
     """Walk the bars once. Decide on a close, fill at the next one.
 
     `lag` is the number of bars between the decision and the fill. It exists so
@@ -153,6 +171,14 @@ def run_backtest(prices: pd.DataFrame, profile: dict, params: sig.SignalParams, 
             if signal_mode == "random":
                 # A coin flip with the same trade frequency, for calibration.
                 wanted = int(rng.choice([-1, 0, 1], p=[0.15, 0.70, 0.15]))
+            if health is not None:
+                # broken: leave now, at whatever the spread is worth. degraded:
+                # keep what is open but start nothing new. The monitor can only
+                # ever reduce exposure, never create it.
+                if health[t] == "broken":
+                    wanted = 0
+                elif health[t] == "degraded" and current == 0:
+                    wanted = 0
             if target.fit is not None:
                 zs[t] = target.z
                 # With a fill delay the strategy already believes it holds the
@@ -196,6 +222,40 @@ def _close(index, entry_bar: int, exit_bar: int, position: int, entry_z: float,
         entry_z=entry_z, exit_z=exit_z, bars_held=exit_bar - entry_bar,
         gross_bps=gross, transaction_bps=cost, carry_bps=carry,
         net_bps=gross - cost + carry, exit_reason=reason)
+
+
+def carry_per_night_bps(profile: dict, a: str, b: str, position: int,
+                        beta: float) -> float:
+    """Financing for one night on a unit of spread exposure, signed.
+
+    Public because anything that predicts what a trade will cost has to charge
+    what the engine charges. Two definitions of financing would let a bound be
+    computed against costs that are never actually paid.
+    """
+    return _carry_bps(profile, a, b, position, beta)
+
+
+def cheaper_direction(profile: dict, a: str, b: str, beta: float) -> int:
+    """Which way round the spread is cheaper to finance: +1 long, -1 short.
+
+    Financing is signed the way brokers quote swap, so a debit is negative and
+    the cheaper side is the *larger* of the two values. Taking the minimum picks
+    the most expensive leg, and a threshold priced against it looks unaffordable
+    when it is not. That bug shipped once, in two places, which is why the
+    answer now lives in one.
+    """
+    return max((carry_per_night_bps(profile, a, b, p, beta), p)
+               for p in (1, -1))[1]
+
+
+def round_trip_bps(profile: dict, a: str, b: str, position: int,
+                   beta: float) -> float:
+    """Transaction cost of opening and closing one unit of spread exposure.
+
+    Public for the same reason as `carry_per_night_bps`.
+    """
+    return (_turn_cost(profile, a, b, 0, position, beta, beta)
+            + _turn_cost(profile, a, b, position, 0, beta, beta))
 
 
 def _carry_bps(profile: dict, a: str, b: str, position: int, beta: float) -> float:
@@ -473,11 +533,23 @@ def build_parser() -> argparse.ArgumentParser:
     given = p.add_argument_group("given by reality")
     given.add_argument("--broker", required=True)
     given.add_argument("--costs-dir", default=str(cost_model.DEFAULT_COSTS))
-    given.add_argument("--bars-per-night", type=float, default=1.0)
+    given.add_argument("--bars-per-night", type=float, default=None,
+                       help="nights of financing per bar; defaults to the asset class and timeframe, which is 1.45 for a daily equity bar and 1.0 only for crypto")
     given.add_argument("--lag", type=int, default=1,
                        help="bars between the decision and the fill; 1 is next close")
     given.add_argument("--leave-open", action="store_true",
                        help="do not close a position still open at the last bar")
+
+    gate = p.add_argument_group("health gate - step 2 driving step 1")
+    gate.add_argument("--health-gate", action="store_true",
+                      help="consult the relationship health monitor each bar: flat while "
+                           "broken, no new entries while degraded")
+    gate.add_argument("--health-lookback", type=int, default=500)
+    gate.add_argument("--health-every", type=int, default=10)
+    gate.add_argument("--health-max-pvalue", type=float, default=0.05)
+    gate.add_argument("--health-degraded-pvalue", type=float, default=0.20)
+    gate.add_argument("--health-break-z", type=float, default=4.0)
+    gate.add_argument("--health-max-beta-drift", type=float, default=3.0)
 
     out = p.add_argument_group("output")
     out.add_argument("-o", "--out", default=None)
@@ -502,11 +574,24 @@ def append_trial(path: Path, args, stats: dict, params: sig.SignalParams,
                  pair: str, out: Path) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     row = {"run": 0, "run_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-           "pair": pair, "timeframe": args.timeframe, "signal": args.signal,
+           "pair": pair, "timeframe": args.timeframe,
+           # Without the window, two rows with identical parameters and
+           # different date ranges are indistinguishable in the log. That
+           # happened: runs 9 and 11 below both read "XLP ~ XLB 1d entry 2.0",
+           # one on 1,934 bars and one on 6,972, and nothing on the row said so.
+           "start": args.start or "", "end": args.end or "",
+           "signal": args.signal,
            "broker": args.broker, "entry_z": params.entry_z, "exit_z": params.exit_z,
            "stop_z": params.stop_z, "max_holding_bars": params.max_holding_bars,
            "hedge_source": params.hedge_source, "fit_window": params.fit_window,
+           "health_gate": "yes" if args.health_gate else "no",
            "rehedge_every": params.rehedge_every, "lag": args.lag,
+           # Financing is charged per bar times this, so it scales the carry
+           # term and nothing else. Leaving it out of the row made run 5 of this
+           # log irreproducible: same pair, same thresholds, same gross to the
+           # basis point, and a carry 45% smaller, because that run charged 1.45
+           # nights a bar for weekends and the row did not say so.
+           "bars_per_night": args.bars_per_night, "warmup": args.warmup,
            "split": args.split, "trades": stats["trades"],
            "gross_bps": round(stats["gross_bps"], 1),
            "transaction_bps": round(stats["transaction_bps"], 1),
@@ -522,8 +607,13 @@ def append_trial(path: Path, args, stats: dict, params: sig.SignalParams,
             header = next(csv.reader(fh), [])
             existing = sum(1 for _ in csv.reader(fh))
         if header and header != list(row):
-            raise UserError(f"{path} was written by an older version; rename it to keep "
-                            "the history and a fresh log will start")
+            added = [c for c in row if c not in header]
+            dropped = [c for c in header if c not in row]
+            raise UserError(
+                f"{path} was written by an older version of this script "
+                f"(added {added or 'none'}, dropped {dropped or 'none'}). "
+                "Rename it to keep the history and a fresh log will start. "
+                "No report was written for this run.")
     row["run"] = existing + 1
     write_header = not path.exists() or path.stat().st_size == 0
     with path.open("a", newline="", encoding="utf-8") as fh:
@@ -552,14 +642,35 @@ def main(argv=None) -> int:
         rehedge_every=args.rehedge_every, use_log=args.price == "log")
 
     prices = pr.load_prices(args)
+    if args.bars_per_night is None:
+        # One definition of how many nights a bar costs, in costs.py, rather
+        # than a 1.0 that silently undercharges every asset class but crypto.
+        first_class = args.asset_class.split(",")[0].strip().lower()
+        args.bars_per_night = cost_model.nights_per_bar(first_class, args.timeframe)
     split = int(len(prices) * args.split)
     if args.warmup >= len(prices):
         raise UserError(f"--warmup {args.warmup} leaves no bars to trade")
 
+    states = None
+    if args.health_gate:
+        if len(prices) <= args.health_lookback:
+            raise UserError(f"--health-lookback {args.health_lookback} needs more bars "
+                            f"than the {len(prices)} available")
+        states = health_states(
+            prices, lookback=args.health_lookback, every=args.health_every,
+            thresholds=dict(max_pvalue=args.health_max_pvalue,
+                            degraded_pvalue=args.health_degraded_pvalue,
+                            min_half_life=2.0, max_half_life=60.0,
+                            break_z=args.health_break_z,
+                            max_beta_drift=args.health_max_beta_drift))
+        share = {s: float(np.mean(states == s)) for s in ("healthy", "degraded", "broken")}
+        log(f"  health gate on: healthy {share['healthy']:.0%}, "
+            f"degraded {share['degraded']:.0%}, broken {share['broken']:.0%}")
+
     result = run_backtest(prices, profile, params, warmup=args.warmup,
                           bars_per_night=args.bars_per_night, signal_mode=args.signal,
                           seed=args.seed, lag=args.lag,
-                          close_at_end=not args.leave_open)
+                          close_at_end=not args.leave_open, health=states)
     stats = summarise(result, split, args.bars_per_year)
     pair = " ~ ".join(prices.columns)
 

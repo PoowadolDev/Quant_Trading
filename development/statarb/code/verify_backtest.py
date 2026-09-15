@@ -415,6 +415,35 @@ def _refuses(cost) -> bool:
     return False
 
 
+def test_nights_per_bar() -> None:
+    import costs as cm
+    print(chr(10) + "  financing per bar - a daily bar is not a night")
+    check("a daily equity bar is financed for more than one night",
+          cm.nights_per_bar("equity", "1d") > 1.0,
+          f"{cm.nights_per_bar('equity', '1d')}")
+    check("five trading days are financed as seven, plus holidays",
+          close(cm.nights_per_bar("equity", "1d"), 1.45, 1e-12))
+    check("forex is financed the same way, collected on Wednesday",
+          close(cm.nights_per_bar("forex", "1d"), 1.40, 1e-12))
+    check("crypto trades every day, so a bar really is a night",
+          close(cm.nights_per_bar("crypto", "1d"), 1.0, 1e-12))
+    check("an unknown asset class does not silently undercharge",
+          cm.nights_per_bar("something-new", "1d") >= 1.0)
+    check("an hourly bar costs less financing than a daily one",
+          cm.nights_per_bar("equity", "1h") < cm.nights_per_bar("equity", "1d"))
+    check("a session of hourly bars costs what the daily bar costs",
+          close(cm.nights_per_bar("equity", "1h") * 6.5,
+                cm.nights_per_bar("equity", "1d"), 1e-12))
+    check("a day of hourly crypto bars costs what the daily bar costs",
+          close(cm.nights_per_bar("crypto", "1h") * 24,
+                cm.nights_per_bar("crypto", "1d"), 1e-12))
+    check("an unknown timeframe falls back to the daily rate rather than to zero",
+          close(cm.nights_per_bar("equity", "3d"),
+                cm.nights_per_bar("equity", "1d"), 1e-12))
+    check("no asset class is financed for nothing",
+          all(cm.nights_per_bar(k, "1d") > 0 for k in cm.NIGHTS_PER_BAR))
+
+
 def test_feasibility() -> None:
     print("\n12. feasibility — the two directions are priced apart")
     import costs as cm
@@ -458,6 +487,56 @@ def test_feasibility() -> None:
           fs.assess(100.0, -5.0, 2.0, 1.0)[0] == fs.ALIVE)
 
 
+def test_health_gate() -> None:
+    print("\n13. health gate - step 2 driving step 1")
+    prices = cointegrated()
+    prof = profile(spread_pips=2.0)
+    thresholds = dict(max_pvalue=0.05, degraded_pvalue=0.20, min_half_life=2.0,
+                      max_half_life=60.0, break_z=4.0, max_beta_drift=3.0)
+
+    states = bt.health_states(prices, lookback=300, every=25, thresholds=thresholds)
+    check("a state is assigned to every bar", len(states) == len(prices))
+    check("bars before the first assessment are not tradable",
+          bool((states[:299] == "broken").all()))
+    check("a clean pair is mostly healthy after that",
+          float(np.mean(states[300:] == "healthy")) > 0.5,
+          f"{float(np.mean(states[300:] == 'healthy')):.0%}")
+
+    # Causality: the verdict at bar t may not depend on anything after t.
+    tampered = prices.copy()
+    cut = 900
+    tampered.iloc[cut:, 0] *= np.linspace(1.0, 2.5, len(tampered) - cut)
+    later = bt.health_states(tampered, lookback=300, every=25, thresholds=thresholds)
+    check("tampering with the future leaves earlier verdicts unchanged",
+          list(states[:cut - 25]) == list(later[:cut - 25]))
+    check("and does change later ones", list(states[cut:]) != list(later[cut:]))
+
+    # The gate is allowed to reduce exposure and nothing else.
+    ungated = run(prices, prof)
+    gated = run(prices, prof, health=states)
+    check("the gate never increases time in the market",
+          int(np.sum(gated.position != 0)) <= int(np.sum(ungated.position != 0)),
+          f"{int(np.sum(gated.position != 0))} against "
+          f"{int(np.sum(ungated.position != 0))} bars")
+    check("the gate never adds trades", len(gated.trades) <= len(ungated.trades),
+          f"{len(gated.trades)} against {len(ungated.trades)}")
+    check("the gated ledger still balances",
+          close(sum(t.net_bps for t in gated.trades), gated.net_bps, 1e-6))
+
+    # An always-broken monitor must produce no trading at all.
+    never = np.array(["broken"] * len(prices), dtype=object)
+    flat = run(prices, prof, health=never)
+    check("a permanently broken relationship is never traded",
+          len(flat.trades) == 0 and close(flat.net_bps, 0.0, 1e-12))
+
+    # An always-healthy monitor must change nothing.
+    always = np.array(["healthy"] * len(prices), dtype=object)
+    same = run(prices, prof, health=always)
+    check("a permanently healthy relationship trades exactly as if ungated",
+          close(same.net_bps, ungated.net_bps, 1e-9),
+          f"{same.net_bps:+.4f} against {ungated.net_bps:+.4f}")
+
+
 def main() -> int:
     global VERBOSE
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -476,7 +555,9 @@ def main() -> int:
     test_real_data()
     test_trade_booking()
     test_cost_profile()
+    test_nights_per_bar()
     test_feasibility()
+    test_health_gate()
 
     print(f"\n{len(PASSED)} passed, {len(FAILED)} failed, {len(SKIPPED)} skipped")
     if FAILED:

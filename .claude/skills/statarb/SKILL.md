@@ -179,8 +179,8 @@ account being traded, including the spread on each leg and any commission.
 AUDUSD ~ NZDUSD  1d  2019-01-01 -> 2026-09-08  2,001 bars
   beta 0.8658   corr 0.891   half-life IS 49.7   OOS explosive
   REJECT - in-sample half-life 49.7 outside 2-30; out-of-sample spread diverges
-  wrote studies\pairs\pair-AUDUSD-NZDUSD-trial001.html  (151.9 KB)
-  trial #1 logged to logs	rials.csv
+  wrote studies/pairs/pair-AUDUSD-NZDUSD-trial001.html  (151.9 KB)
+  trial #1 logged to logs/trials.csv
 ```
 
 ### Exit codes
@@ -363,6 +363,79 @@ Say these plainly rather than implying more rigour than exists:
 - Reports are for the user to read. Do not generate one as a side effect of an analysis
   task; use `--dry-run` or `--json` instead.
 
+## Screening a whole universe
+
+`pair_report.py` studies one pair. `screen.py` studies all of them, and it is the entry
+point for any search:
+
+```bash
+python screen.py -u equities --within-sector --broker equity
+python screen.py -u fx-all -t 1m --broker fxretail --max-half-life 200
+python screen.py -s XLF,XLE,XLK,XLV -a index --broker etf
+```
+
+**It reserves a window at each end of the record and never looks at it while ranking.**
+That is not a nicety. This project produced two candidates without it — `XLP~XLB` and
+`ALL~TRV` — and both were cointegrated *only* on the window that had selected them, at
+p = 0.033 and p = 0.014, and on no window before it. A tail split of the screening window
+cannot catch that, because the window itself was part of the choice. `--holdout 0` restores
+the old behaviour and prints a warning saying what happened last time.
+
+The gates, in order, cheap first:
+
+| Gate | Rejects |
+|---|---|
+| cointegration | the gap is not closing |
+| held-out tail | it stops closing inside the screening window |
+| **reserved windows** | it does not exist outside the window that selected it |
+| **hedge-ratio swing** | the ratio moves by more than 3x across windows, or changes sign |
+| hedge quality | the position is directional wearing a spread's name |
+| reversion speed | the capital is tied up longer than intended |
+| **replay** (`--broker`) | the trades do not do what the model predicted |
+
+The last one runs only on whatever survived the rest, because it replays the strategy and
+that costs real time. It asks the three questions the `sizing` skill owns: does the
+expected move describe these trades, does any entry threshold earn its own cost back, does
+the sample establish a positive mean. **All three have killed every candidate this project
+has ever had.**
+
+Every screen prints survivors beside the number chance alone would produce, for both the
+first gate and the reserved windows. A screen that finds five where noise gives five has
+found nothing, and the screen says so rather than leaving it to be noticed.
+
+### What it currently finds
+
+```
+universe        pairs  coint  noise  outside  expected  survivors
+equities          205     17   10.2        0       1.0          0
+sector-etfs       105      6    5.2        0      0.51          0
+fx-all             66     15    3.3        0      0.32          0
+fx-all (1m)        45     16    1.0        3      0.10          0
+index-etfs          6      0    0.3        0      0.03          0
+crypto-majors       1      0    0.1        0       0.0          0
+```
+
+One pair has ever reached the replay: `USDCHF~USDCAD` on one-minute bars, which cleared
+every statistical gate — p = 0.027, holding out of sample at 0.006 and on the reserved
+early window at 0.000, ratio stable to 1.75x, 6% net exposed — and was then rejected
+because its expected move over-predicts by 20x, no threshold earns its own cost, and the
+uncertainty-adjusted mean is −1.4 bps.
+
+That is the funnel working. The statistics let it through; the trades did not.
+
+Once a pair passes this gate, the next steps have their own skills: **relationship** for
+the cointegration test, the hedge-quality check and the health monitor, **tradingcosts**
+for what the broker charges and whether the edge survives financing, then **backtest** for
+what the strategy would have earned.
+
+A half-life is an estimate, not a test. This skill has no p-value anywhere; **relationship**
+does, and on stored data the two disagree on 7 of 13 pairs.
+
 Full build plan and what comes after this gate: `development/statarb/plan/PLAN.md`, with
-the per-step splits in `plan/STEP1.md` and `plan/STEP2.md`. Data
+the per-step splits in `plan/STEP1.md`, `plan/STEP2.md` and `plan/STEP3.md`. Data
 loading, storage and quality: the `marketdata` skill.
+
+The half-life and expected move this skill reports are **estimates, not outcomes**. Before
+treating either as an edge, the `sizing` skill measures what the trades actually did: on
+every pair tested so far the expected move over-predicts the realised result by 10x to 68x,
+or has the wrong sign.

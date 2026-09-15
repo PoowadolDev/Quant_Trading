@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -27,7 +28,7 @@ import paths
 
 paths.ensure_marketdata_importable()
 
-from marketdata import Instrument, ParquetStore  # noqa: E402
+from marketdata import DEFAULT_SOURCE, Instrument, ParquetStore  # noqa: E402
 
 DEFAULT_STORE = paths.STORE
 DEFAULT_COSTS = paths.COSTS
@@ -39,6 +40,39 @@ TRIPLE_SWAP_WEEKDAY = 2                      # Monday is 0
 
 class UserError(Exception):
     """Bad input from the command line. Reported without a traceback."""
+
+
+#: Nights of financing charged per bar, by asset class, for daily bars.
+#:
+#: A daily bar is not a night. Equities and their funds trade five days a week
+#: and are financed seven, plus market holidays, which comes to about 1.45.
+#: Forex is the same five-for-seven, collected as a triple charge on Wednesday.
+#: Crypto trades every day, so there a bar really is a night.
+#:
+#: This is here rather than defaulted to 1.0 at each call site because charging
+#: 1.0 on a daily equity bar understates financing by 45%, and financing is the
+#: term that has decided every candidate in this project. It was also, for a
+#: while, inconsistent between runs and unrecorded in the logs, which made two
+#: rows of `backtests.csv` impossible to reproduce.
+NIGHTS_PER_BAR = {"forex": 1.40, "crypto": 1.00, "commodity": 1.45,
+                  "index": 1.45, "equity": 1.45}
+
+
+def nights_per_bar(asset_class: str, timeframe: str = "1d") -> float:
+    """Financing nights charged per bar of `timeframe` in `asset_class`.
+
+    Sub-daily bars divide the daily figure by how many of them make a session,
+    which is what made hourly `XLP~XLB` pay 75 basis points of carry against
+    1,058 on daily bars.
+    """
+    daily = NIGHTS_PER_BAR.get(asset_class, 1.45)
+    per_session = {"1d": 1.0, "1w": 0.2, "4h": 1 / 1.625, "1h": 1 / 6.5,
+                   "15m": 1 / 26, "5m": 1 / 78, "1m": 1 / 390}
+    if asset_class == "crypto":
+        # No session: a crypto day is twenty-four hours of bars.
+        per_session = {"1d": 1.0, "1w": 1 / 7, "4h": 1 / 6, "1h": 1 / 24,
+                       "15m": 1 / 96, "5m": 1 / 288, "1m": 1 / 1440}
+    return daily * per_session.get(timeframe, 1.0)
 
 
 def pip_size(symbol: str) -> float:
@@ -123,13 +157,26 @@ def save_profile(path: Path, symbols: dict[str, SymbolCost]) -> None:
     path.write_text(json.dumps(body, indent=2), encoding="utf-8")
 
 
-def price_level(symbol: str, asset_class: str, store: Path) -> float | None:
-    """Latest stored close, used to turn pips and swap points into basis points."""
+def price_level(symbol: str, asset_class: str, store: Path,
+                source: str | None = None, timeframe: str = "1d") -> float | None:
+    """Latest stored close, used to turn pips and swap points into basis points.
+
+    `Instrument` defaults to yahoo for every asset class, but crypto lives under
+    binance in the store, so the source is resolved per asset class here.
+    """
     try:
-        frame = ParquetStore(store).read(Instrument(symbol, asset_class=asset_class))
+        inst = Instrument(symbol, asset_class=asset_class, timeframe=timeframe,
+                          source=source or DEFAULT_SOURCE[asset_class])
+        frame = ParquetStore(store).read(inst)
         if frame is None or frame.empty:
             return None
-        return float(frame["close"].iloc[-1])
+        # The final stored bar is sometimes a partial one with no close, so the
+        # last *valid* price is used. Taking iloc[-1] blindly yields NaN, which
+        # propagates silently into every cost figure derived from it.
+        closes = frame["close"].dropna()
+        if closes.empty:
+            return None
+        return float(closes.iloc[-1])
     except Exception:                                             # noqa: BLE001
         return None
 
@@ -185,6 +232,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="spread multiple in thin hours")
     add.add_argument("--rollover-widening", type=float, default=1.0,
                      help="spread multiple around 17:00 New York")
+    add.add_argument("--source", default=None,
+                     help="store source for the price lookup; per asset class if unset")
+    add.add_argument("-t", "--timeframe", default="1d",
+                     help="store timeframe for the price lookup")
     add.add_argument("--price", type=float, default=None,
                      help="quote level for conversions; taken from the store if unset")
     add.add_argument("--from-broker-sheet", action="store_true",
@@ -230,7 +281,9 @@ def main(argv=None) -> int:
     symbols = load_profile(path)
 
     if args.command == "add":
-        price = args.price or price_level(args.symbol, args.asset_class, Path(args.store))
+        price = args.price or price_level(args.symbol, args.asset_class,
+                                          Path(args.store), args.source,
+                                          args.timeframe)
         entry = SymbolCost(
             symbol=args.symbol.upper(), asset_class=args.asset_class,
             spread_pips=args.spread_pips, commission_bps=args.commission_bps,
@@ -239,8 +292,13 @@ def main(argv=None) -> int:
             rollover_widening=args.rollover_widening, price=price,
             estimated=not args.from_broker_sheet,
             updated=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        if price is not None and not math.isfinite(price):
+            price = None
         if price is None:
-            raise UserError(f"no price level for {args.symbol}; pass --price")
+            raise UserError(
+                f"no price level for {args.symbol} ({args.asset_class}, "
+                f"{args.source or DEFAULT_SOURCE[args.asset_class]}, {args.timeframe}) "
+                f"in {args.store}. Download it with the marketdata CLI, or pass --price.")
         symbols[entry.symbol] = entry
         save_profile(path, symbols)
         print(f"{entry.symbol}: spread {entry.spread_bps():.2f} bps per crossing, "

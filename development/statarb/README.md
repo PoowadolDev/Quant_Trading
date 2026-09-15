@@ -14,8 +14,9 @@ statarb/
 ├── logs/        one row per run                trials.csv, backtests.csv
 ├── worklog/     what was done, for a human     summaries with diagrams
 └── studies/     what the scripts produced
-    ├── pairs/       pair_report.py output
-    └── backtests/   backtest.py output
+    ├── pairs/           pair_report.py output
+    ├── backtests/       backtest.py output
+    └── relationships/   relationship_report.py output
 ```
 
 The distinction that matters: **`worklog/` is written for you to read, `studies/` is written
@@ -31,6 +32,11 @@ with one set of parameters, and the row in `logs/` that points at it.
 | Is this pair worth trading? | `code/pair_report.py` |
 | Does it survive costs and financing? | `code/feasibility.py` |
 | What would it have earned? | `code/backtest.py` |
+| Did the trades do what was predicted? | `code/outcomes.py` |
+| Where can it be entered at all? | `code/thresholds.py` |
+| How many bets does this book hold? | `code/risk.py` |
+| How much should be held? | `code/sizing.py` |
+| All three, on one page | `code/signal_report.py` |
 
 ## Running
 
@@ -44,8 +50,19 @@ python costs.py show --broker demo --holding-bars 7       # what does trading it
 python feasibility.py -s USDNOK,USDZAR --broker demo      # does the edge survive?
 python backtest.py -s USDNOK,USDZAR --broker demo         # what would it have earned?
 
+python relationship_report.py -s SPY,DIA -a index          # is it real, and still alive?
+python screen.py -u equities --within-sector --broker equity  # screen a universe
+
+python outcomes.py -s XLP,XLB -a index --broker etf       # what happened to the trades?
+python thresholds.py -s XLP,XLB -a index --broker etf     # where can it be entered at all?
+python risk.py --book XLP~XLB:index,ALL~TRV:equity        # how many bets is this really?
+python sizing.py -s XLP,XLB -a index --broker etf --net   # how much should be held?
+python signal_report.py -s XLP,XLB -a index --broker etf  # all three, on one page
+
 python verify_pair_report.py                              # 72 checks
-python verify_backtest.py                                 # 77 checks
+python verify_backtest.py                                 # 97 checks
+python verify_relationship.py                             # 89 checks
+python verify_signal.py                                   # 188 checks
 ```
 
 Every script takes `--help`, `--dry-run` and `--json`. Parameters are typed by hand
@@ -56,14 +73,30 @@ honest count of them.
 
 | Step | What | State |
 |---|---|---|
-| 0 | Structure study | ✅ one candidate survived, `USDNOK~USDZAR` |
-| 1 | Cost model and backtest engine | ✅ engine done, candidate fails at −267 bps |
-| 2 | Relationship engine and health monitor | 🟡 next |
-| 3–7 | Signal, validation, paper, live, other assets | ⬜ |
+| 0 | Structure study | ✅ done |
+| 1 | Cost model and backtest engine | ✅ built, 97 checks green |
+| 2 | Relationship engine and health monitor | ✅ built, 89 checks green |
+| 3 | Signal, risk, sizing | ✅ built, 188 checks green |
+| 4 | Validation | 🟡 started, 49 checks green |
+| 5–6 | Paper, live | ⬜ |
+| 7 | Other asset classes | ✅ done early — crypto, commodities and indices searched |
 
-The candidate's gross result is negative before any cost is charged, so the failure is in
-the signal, not the fee schedule. Step 2 is where a better hedge ratio and a real
-cointegration test would either rescue it or bury it.
+**The machinery is finished and verified. There is no candidate.** Around 850 pair studies
+across forex, crypto, commodities, equity indices and individual equities at daily,
+four-hour, hourly and one-minute bars; none survives every gate. `XLP~XLB` and `ALL~TRV` came closest and
+were both rejected on 2026-09-14, when the decades of history neither had been fitted on
+were added. Each was cointegrated only on the window that selected it, each had a hedge
+ratio wandering by a factor of several across eras, and `ALL~TRV` loses 4,870 bps gross
+over thirty years — before any cost is charged.
+
+Step 3 — signal, risk and sizing — is built and verified: `outcomes.py`, `thresholds.py`,
+`risk.py`, `sizing.py` and `verify_signal.py`, described in [plan/STEP3.md](plan/STEP3.md).
+It was built against simulated processes whose answers are known in advance rather than
+waiting for a candidate. The measurement that set its order: the expected move the pipeline
+has used since Step 0 over-predicts realised gross per trade by 10× to 68×, and has the
+sign wrong on half the pairs tested. Writing the layer turned up why — raising the entry
+threshold raises the predicted payoff and lowers the realised one, because a large
+deviation is evidence the relationship has broken rather than evidence of opportunity.
 
 ## Conventions
 

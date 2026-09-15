@@ -6,17 +6,108 @@ stops working. This file splits it into six scripts, each run by hand with param
 the command line, in the same style as `pair_report.py`.
 
 **Most of this is not blocked.** Step 1a and 1b are waiting on broker swap and spread
-numbers. Sub-steps 2a to 2d need nothing but the data already in the store, so they are the
-useful thing to build while that wait continues.
+numbers. Everything here needs only the data already in the store.
 
-| Sub-step | Script | Needs | State |
+`statsmodels` is installed. `adfuller`, `coint`, `coint_johansen` and `OLS` all work; a
+Windows Application Control policy on this machine blocks `statsmodels.api`, which pulls in
+compiled state-space code, so the library's Kalman filter is unavailable and `hedge.py`
+carries its own.
+
+> **Order revised 2026-09-13 after measuring, not guessing.** The investigation below
+> tested a cheap version of each component against stored data and asked one question of
+> each: what would this have caught that the current pipeline misses? The answers moved
+> `cointegration.py` to the front and `factors.py` to the back.
+
+| Order | Script | Why here | State |
 |---|---|---|---|
-| 2a | `factors.py` — currency-factor decomposition | — | ⬜ |
-| 2b | `cointegration.py` — the hypothesis test Step 0 never had | `statsmodels` | ⬜ |
-| 2c | `hedge.py` — static, rolling and Kalman hedge ratios compared | — | ⬜ |
-| 2d | `relationship.py` — the engine, one import for everything above | 2a–2c | ⬜ |
-| 2e | `health.py` — detect a relationship that has died | 2d | ⬜ |
-| 2f | `verify_relationship.py` — prove the engine is not lying | 2d, 2e | ⬜ |
+| 1 | `cointegration.py` | disagrees with the old gate on 7 of 13 pairs, and is calibrated | ✅ built |
+| 2 | `hedge.py` | the sign of beta separates real spreads from directional bets | ✅ built |
+| 3 | `health.py` | every known failure is visible in a rolling window before the loss | ✅ built |
+| 4 | `verify_relationship.py` | none of the above is trustworthy unverified | ✅ 48 checks green |
+| 5 | `relationship_report.py` | all three gates on one page, so a verdict can be looked at | ✅ built |
+| 6 | `factors.py` | confirms what is already measured; changes no decision | ⬜ deferred |
+| 7 | `relationship.py` | the unifier — worth writing once the others settle | ⬜ deferred |
+
+**Verified in isolation.** The suite passes with `backtest`, `costs`, `strategy` and
+`feasibility` refused at the import hook, so nothing here depends on Step 1. The
+dependency runs one way only: `backtest.py --health-gate` may consult the monitor, never
+the reverse.
+
+**Audited 2026-09-13.** Five defects found and fixed. The one that mattered: the Kalman
+filter estimated its observation variance over the whole sample, so a bar in 2026 changed
+the hedge ratio it reported for 2020 — a causal filter that was not causal. Also: the exit
+code ignored the out-of-sample result, `--lags` accepted any string, and the health monitor
+counted its own triggers by parsing its own prose.
+
+**A claim of mine was wrong and is corrected.** I reported the cointegration test as
+over-sized at 7.1%, and wrote 8.5% into the help text, from runs of 800 and 200 random-walk
+pairs. Measured at 2000 pairs every lag rule rejects between 4.5% and 4.9% against a
+nominal 5%: the test is correctly sized, and those earlier figures were sampling noise. The
+calibration check now scales its own tolerance to the trial count so the mistake cannot
+repeat.
+
+## What the investigation found
+
+**The cointegration test disagrees with the half-life gate on 7 of 13 pairs.**
+
+```
+pair                  beta   half-life   gate    ADF p    EG p   agree?
+USDNOK~USDZAR       +0.773         4.9   pass    0.002   0.007     yes
+EURUSD~GBPUSD       +0.872        46.7   fail    0.009   0.030      NO
+AUDUSD~NZDUSD       +0.866        49.7   fail    0.878   0.838     yes
+GBPJPY~EURJPY       +1.076        36.1   fail    0.002   0.010      NO
+USDCAD~USDNOK       +0.273        26.9   pass    0.207   0.416      NO
+GBPUSD~USDNOK       -0.400        27.0   pass    0.238   0.391      NO
+SOL~LINK            +0.716       126.1   fail    0.000   0.000      NO
+DOGE~AVAX           +0.528        59.1   fail    0.000   0.000      NO
+```
+
+`GBPUSD~USDNOK` passed the Step 0 gate, was reported as the best forex candidate, and then
+failed six of seven re-tests with its hedge ratio changing sign. Engle-Granger rejects it
+at p = 0.391 on the first run. The test would have prevented the single most expensive
+mistake in this project so far. In the other direction, `SOL~LINK` and `DOGE~AVAX` are
+strongly cointegrated at p = 0.000 and the half-life bound discards both.
+
+The test is calibrated: on 2000 pairs of independent random walks Engle-Granger rejects the
+null between 4.5% and 4.9% of the time at the nominal 5% level, whichever lag rule is used.
+Earlier runs of 200 to 800 pairs gave 4.0%, 7.1% and 8.5% — all sampling noise around the
+same true value, and a reminder that a rejection rate needs thousands of trials before it
+can be called over-sized. The half-life gate has no p-value to calibrate at all.
+
+**The sign of the hedge ratio separates real spreads from directional bets.**
+
+```
+pair              full beta   rolling min   rolling max   share of time <= 0
+EURUSD~GBPUSD        +0.895        +0.046        +1.425                   0%
+AUDUSD~NZDUSD        +0.675        +0.178        +1.377                   0%
+GBPJPY~EURJPY        +1.055        +0.493        +1.837                   0%
+USDNOK~USDZAR        +0.824        -0.141        +1.045                   3%
+USDMXN~USDZAR        -0.201        -1.815        +1.100                  33%
+AUDNZD~AUDUSD        -0.047        -0.514        +0.923                  39%
+EURCHF~EURJPY        -0.431        -0.536        +0.972                  44%
+```
+
+A negative ratio puts both legs on the same side of the market. That is a leveraged
+directional position inside a book that is supposed to be neutral, and no filter repairs
+it — a Kalman filter would track the sign change, not fix it.
+
+**Every known failure is visible in a rolling window before the loss.**
+
+```
+AUDUSD~NZDUSD   2019-2020  p 0.402  BROKEN    ... BROKEN in every window; never tradable
+GBPUSD~USDNOK   2020-2022  p 0.015  healthy   2022-2023  p 0.698  BROKEN
+USDNOK~USDZAR   healthy, BROKEN, healthy, BROKEN, degraded across five windows
+```
+
+`GBPUSD~USDNOK` was genuinely healthy in 2020-2022 and dead from 2022 onward. The
+full-sample fit averaged across both and produced a pass. Even the surviving candidate is
+cointegrated in only two of five windows, which is very likely where its backtest profit
+came from and why its out-of-sample edge was only +63 bps.
+
+**Forex rank deficiency, measured.** Twelve pairs, eight effective directions, four
+eigenvalues at essentially zero, and a triangular residual of 0.42 bps against a 1 to 2 bps
+spread. Useful context, but it changes no decision that the other three do not already
+decide — hence its place at the back of the queue.
 
 The candidate is still `USDNOK ~ USDZAR`, hedge ratio about +0.77, half-life 5 to 7 bars on
 daily data, trial 23 in `logs/trials.csv`.
@@ -112,8 +203,8 @@ reporting the best p-value is exactly the multiple-comparisons error that killed
 **Done when** `USDNOK~USDZAR` has ADF and Engle–Granger results in and out of sample, and
 the pair report grows a real p-value row in place of the current placeholder.
 
-**Blocked on** `pip install statsmodels`. One command, and it also unblocks nothing else —
-this is the only sub-step that needs it.
+**Built.** `statsmodels` is installed and the three tests run. Johansen is available for
+the multi-leg case even though nothing here uses more than two legs yet.
 
 ---
 
@@ -264,11 +355,31 @@ measured, not assumed.
 | Multi-leg baskets | The engine should be written so it generalises, but the candidate has two legs |
 | Live data feed | Step 5 |
 
+## What the gates said when pointed at the whole store
+
+Run across forex, crypto, commodities and equity indices at three timeframes, the three
+gates rejected everything. They also disagreed with the earlier stages in both directions,
+which is the point of having them:
+
+| Pair | statarb | cointegration | hedge | health | backtest |
+|---|---|---|---|---|---|
+| `USDNOK~USDZAR` | pass | **fail** — in sample only | pass | pass | −285 bps |
+| `EURUSD~GBPUSD` | **fail** — half-life 47 | pass | pass | fail | +62 bps |
+| `BTC-USDT~ETH-USDT` | pass | **fail** | pass | fail | +787 bps |
+| `SPY~DIA` | fail | **pass** | **pass** | fail | −581 bps |
+
+`EURUSD~GBPUSD` is the clearest case for Step 2 existing: the half-life bound threw it out,
+it is genuinely cointegrated, and its backtest is positive. `SPY~DIA` is the closest thing
+to a candidate this project has found — two gates passed — and retail financing still takes
+752 bps to earn 205.
+
 ## Order of work
 
-1. `pip install statsmodels` — the one blocking dependency, and it only gates 2b
-2. Build 2c first if you want a quick result: it is self-contained and it directly addresses
-   the failure mode that killed `GBPUSD~USDNOK`
-3. 2a and 2b in either order
-4. 2d to unify them, then refactor `pair_report.py` onto it
-5. 2e, then 2f before trusting any of it
+1. ✅ `cointegration.py` — the test the pipeline never had
+2. ✅ `hedge.py` — estimator comparison plus the hedge-quality gate
+3. ✅ `health.py` — the rolling state machine, with `--replay` to set its thresholds
+4. ✅ `verify_relationship.py` — ground truth, calibration, and the known failures
+5. ✅ `relationship_report.py` — the evidence on one page, in `studies/relationships/`
+6. ⬜ `factors.py` — deferred; it confirms rather than decides
+7. ⬜ `relationship.py` — deferred until the others have settled, then `pair_report.py` is
+   refactored onto it so there is one spread implementation rather than two

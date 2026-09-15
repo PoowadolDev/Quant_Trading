@@ -20,6 +20,7 @@ from .instruments import (
     UNIVERSES,
     Instrument,
     resolve_instruments,
+    INDEX_SYMBOLS,
     to_source_symbol,
 )
 from .feeds import BinanceFeed, DataFeed, FeedError, YahooFeed, get_feed, normalise
