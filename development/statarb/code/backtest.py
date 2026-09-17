@@ -291,13 +291,144 @@ def drawdown(equity: np.ndarray) -> np.ndarray:
     return equity - peak
 
 
+def sharpe_ratio(net: np.ndarray, bars_per_year: float) -> float:
+    """Annualised mean over deviation of the per-bar net returns.
+
+    One definition, used by both `summarise` and `risk_metrics`. It lived in two
+    places for one commit, which is how this project has produced three separate
+    "two copies of a formula disagreed" defects.
+    """
+    if len(net) <= 2:
+        return 0.0
+    vol = float(np.std(net, ddof=1))
+    return (float(np.mean(net)) / vol * math.sqrt(bars_per_year)) if vol > 0 else 0.0
+
+
+def underwater_bars(equity: np.ndarray) -> tuple[int, int]:
+    """Longest stretch below a previous peak, and how much of it is unrecovered.
+
+    Returns the longest underwater run in bars and the length of the run still
+    open at the end of the record. The second number matters because a strategy
+    whose worst drawdown is still unrecovered on the last bar has not shown that
+    it recovers at all; the maximum drawdown alone cannot say that.
+    """
+    if len(equity) == 0:
+        return 0, 0
+    peak = np.maximum.accumulate(equity)
+    under = equity < peak
+    longest = run = 0
+    for flag in under:
+        run = run + 1 if flag else 0
+        longest = max(longest, run)
+    trailing = 0
+    for flag in under[::-1]:
+        if not flag:
+            break
+        trailing += 1
+    return longest, trailing
+
+
+def risk_metrics(result: Result, bars_per_year: float, net: np.ndarray,
+                 dd: np.ndarray, years: float) -> dict:
+    """Profit and risk detail beyond the headline net figure.
+
+    Everything here is derived from trades and the net equity curve that
+    `run_backtest` already produced, so these numbers cannot disagree with the
+    headline ones: there is no second simulation and no second cost model.
+
+    Two of them are included specifically because they are the ones that stop a
+    backtest being read too kindly.
+
+    `sharpe_stderr` is the standard error of the Sharpe ratio itself, about
+    `sqrt((1 + SR^2 / 2) / n)` annualised. A Sharpe of 0.33 measured over thirty
+    trades is not distinguishable from zero, and printing the ratio without its
+    error invites treating it as though it were.
+
+    `mean_stderr_bps` is the standard error of the per-trade mean, the same
+    quantity `sizing.py` uses for its haircut. When the mean is fewer than two
+    standard errors from zero, the growth-optimal size collapses, and the reader
+    should see why before seeing the profit.
+    """
+    trades = result.trades
+    net_per_trade = np.array([t.net_bps for t in trades], dtype=float)
+    wins = net_per_trade[net_per_trade > 0]
+    losses = net_per_trade[net_per_trade <= 0]
+
+    gross_win = float(wins.sum()) if len(wins) else 0.0
+    gross_loss = float(-losses.sum()) if len(losses) else 0.0
+    profit_factor = (gross_win / gross_loss) if gross_loss > 0 else float("inf")
+
+    # Longest run of consecutive losing trades, which is what a drawdown feels
+    # like to whoever is watching it happen.
+    worst_streak = streak = 0
+    for value in net_per_trade:
+        streak = streak + 1 if value <= 0 else 0
+        worst_streak = max(worst_streak, streak)
+
+    downside = net[net < 0]
+    downside_dev = float(np.std(downside, ddof=1)) if len(downside) > 2 else 0.0
+    sortino = (float(np.mean(net)) / downside_dev * math.sqrt(bars_per_year)
+               if downside_dev > 0 else 0.0)
+
+    vol = float(np.std(net, ddof=1)) if len(net) > 2 else 0.0
+    sharpe = sharpe_ratio(net, bars_per_year)
+    n_obs = max(len(net), 2)
+    sharpe_stderr = math.sqrt((1.0 + 0.5 * sharpe ** 2) / n_obs) * math.sqrt(bars_per_year)
+
+    max_dd = float(dd.min()) if len(dd) else 0.0
+    annual = result.net_bps / years
+    calmar = (annual / abs(max_dd)) if max_dd < 0 else float("inf")
+
+    longest_uw, trailing_uw = underwater_bars(result.equity_net)
+
+    mean_bps = float(net_per_trade.mean()) if len(net_per_trade) else 0.0
+    mean_se = (float(net_per_trade.std(ddof=1) / math.sqrt(len(net_per_trade)))
+               if len(net_per_trade) > 1 else float("nan"))
+
+    # The worst five per cent of trades, and the average of them. A single
+    # percentile says where the tail starts; the mean beyond it says how far it
+    # goes, which is the number that sizes a stop.
+    var95 = (float(np.percentile(net_per_trade, 5)) if len(net_per_trade) else 0.0)
+    tail = net_per_trade[net_per_trade <= var95]
+    shortfall = float(tail.mean()) if len(tail) else 0.0
+
+    return {
+        "net_pct": result.net_bps / 100.0,
+        "gross_pct": result.gross_bps / 100.0,
+        "net_pct_per_year": annual / 100.0,
+        "max_drawdown_pct": max_dd / 100.0,
+        "volatility_pct_per_year": vol * math.sqrt(bars_per_year) / 100.0,
+        "profit_factor": profit_factor,
+        "expectancy_bps": mean_bps,
+        "mean_stderr_bps": mean_se,
+        "mean_over_stderr": (mean_bps / mean_se) if mean_se and math.isfinite(mean_se)
+        and mean_se > 0 else float("nan"),
+        "avg_win_bps": float(wins.mean()) if len(wins) else 0.0,
+        "avg_loss_bps": float(losses.mean()) if len(losses) else 0.0,
+        "payoff_ratio": (float(wins.mean() / -losses.mean())
+                         if len(wins) and len(losses) and losses.mean() < 0
+                         else float("inf")),
+        "best_trade_bps": float(net_per_trade.max()) if len(net_per_trade) else 0.0,
+        "worst_trade_bps": float(net_per_trade.min()) if len(net_per_trade) else 0.0,
+        "trade_var95_bps": var95,
+        "expected_shortfall_bps": shortfall,
+        "worst_losing_streak": worst_streak,
+        "sortino": sortino,
+        "sharpe": sharpe,
+        "sharpe_stderr": sharpe_stderr,
+        "calmar": calmar,
+        "longest_underwater_bars": longest_uw,
+        "unrecovered_bars": trailing_uw,
+        "trades_per_year": len(trades) / years if years > 0 else 0.0,
+    }
+
+
 def summarise(result: Result, split: int, bars_per_year: float) -> dict:
     net = np.diff(np.concatenate([[0.0], result.equity_net]))
     wins = [t for t in result.trades if t.net_bps > 0]
     dd = drawdown(result.equity_net)
     years = max(result.bars / bars_per_year, 1e-9)
-    vol = float(np.std(net, ddof=1)) if len(net) > 2 else 0.0
-    sharpe = (float(np.mean(net)) / vol * math.sqrt(bars_per_year)) if vol > 0 else 0.0
+    sharpe = sharpe_ratio(net, bars_per_year)
     return {
         "trades": len(result.trades),
         "win_rate": len(wins) / len(result.trades) if result.trades else 0.0,
@@ -314,7 +445,59 @@ def summarise(result: Result, split: int, bars_per_year: float) -> dict:
         "net_in_sample_bps": float(result.equity_net[split - 1]) if split > 0 else 0.0,
         "net_out_of_sample_bps": float(result.equity_net[-1] - result.equity_net[split - 1])
         if split > 0 else 0.0,
+        **risk_metrics(result, bars_per_year, net, dd, years),
     }
+
+
+def show_risk(stats: dict, log) -> None:
+    """The profit and risk detail, in percent, under the headline bps line.
+
+    Percent is what the reader converts to anyway, and basis points are what the
+    engine computes in; both are printed so neither has to be trusted on faith.
+    All of it is per unit of spread notional, which is stated because it is the
+    assumption that turns these figures into an account return and it is not the
+    same as leverage of one.
+    """
+    pf = stats["profit_factor"]
+    payoff = stats["payoff_ratio"]
+    calmar = stats["calmar"]
+    ratio = stats["mean_over_stderr"]
+
+    log("")
+    log("  profit                              risk")
+    log(f"    net             {stats['net_pct']:>9,.2f}%"
+        f"         max drawdown      {stats['max_drawdown_pct']:>9,.2f}%")
+    log(f"    per year        {stats['net_pct_per_year']:>9,.2f}%"
+        f"         volatility/year   {stats['volatility_pct_per_year']:>9,.2f}%")
+    log(f"    gross           {stats['gross_pct']:>9,.2f}%"
+        f"         Calmar            {calmar:>10,.2f}")
+    log(f"    profit factor   {pf:>10,.2f}"
+        f"         Sortino           {stats['sortino']:>10,.2f}")
+    log(f"    payoff ratio    {payoff:>10,.2f}"
+        f"         longest underwater{stats['longest_underwater_bars']:>8,} bars")
+    log(f"    trades/year     {stats['trades_per_year']:>10,.1f}"
+        f"         worst losing run  {stats['worst_losing_streak']:>8,} trades")
+    log("")
+    log(f"    per trade: expectancy {stats['expectancy_bps']:+,.1f} bps, "
+        f"average win {stats['avg_win_bps']:+,.1f}, "
+        f"average loss {stats['avg_loss_bps']:+,.1f}")
+    log(f"    tail:      worst {stats['worst_trade_bps']:+,.1f} bps, "
+        f"worst 5% start {stats['trade_var95_bps']:+,.1f}, "
+        f"average beyond it {stats['expected_shortfall_bps']:+,.1f}")
+
+    # The two lines that decide whether any of the above should be believed.
+    log("")
+    log(f"    Sharpe {stats['sharpe']:.2f} +/- {stats['sharpe_stderr']:.2f} "
+        f"(standard error; on this many observations)")
+    if math.isfinite(ratio):
+        verdict = ("the mean is indistinguishable from zero" if abs(ratio) < 2
+                   else "the mean is at least two standard errors from zero")
+        log(f"    mean/standard error {ratio:+.2f} - {verdict}")
+    if stats["unrecovered_bars"] > 0:
+        log(f"    still {stats['unrecovered_bars']:,} bars below the previous peak "
+            f"on the last bar of the record")
+    log("    all figures are per unit of spread notional, not account equity; "
+        "sizing.py converts")
 
 
 def waterfall_chart(stats: dict) -> str:
@@ -561,6 +744,9 @@ def build_parser() -> argparse.ArgumentParser:
     out.add_argument("--bars-per-year", type=float, default=252.0)
     out.add_argument("--seed", type=int, default=0, help="for --signal random")
     out.add_argument("--dry-run", action="store_true")
+    out.add_argument("--brief", action="store_true",
+                     help="print only the headline lines, without the risk and "
+                          "profit detail")
     out.add_argument("--json", action="store_true")
     out.add_argument("--open", action="store_true")
     out.add_argument("-q", "--quiet", action="store_true")
@@ -681,6 +867,8 @@ def main(argv=None) -> int:
         f"  carry {stats['carry_bps']:+,.1f}  net {stats['net_bps']:+,.1f} bps")
     log(f"  out of sample {stats['net_out_of_sample_bps']:+,.1f} bps   "
         f"Sharpe {stats['sharpe']:.2f}   max drawdown {stats['max_drawdown_bps']:,.1f} bps")
+    if not args.brief:
+        show_risk(stats, log)
     if estimated:
         log("  NOTE: the cost profile is an estimate, not a broker sheet")
 

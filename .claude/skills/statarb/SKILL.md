@@ -431,9 +431,61 @@ what the strategy would have earned.
 A half-life is an estimate, not a test. This skill has no p-value anywhere; **relationship**
 does, and on stored data the two disagree on 7 of 13 pairs.
 
+The screen's "noise alone would give about X" line is `N x level`, and on real equity data
+the measured floor is a third higher — 78.8 against 58.6 on 1,171 pairs. The `validation`
+skill measures it by bootstrap. Never report a hit count against the printed figure alone.
+
+## The research log — every pair, every gate value, one file
+
+`screen.py` appends one row per pair tested to `logs/pair_research.csv` on every run, and
+the row carries **both the result and the parameters that produced it**. Suppress with
+`--no-research-log`, redirect with `--research-log PATH`.
+
+This exists because neither of the other two files can answer the question a later
+optimisation asks. `--dump` writes per-pair results with no record of the gates in force;
+`logs/screens.csv` writes the gates but only per-screen aggregates. Joining them after the
+fact is guesswork once a default has changed.
+
+45 columns in three blocks, left to right:
+
+| block | columns |
+|---|---|
+| identity | `run`, `run_utc`, `universe`, `asset_class`, `timeframe`, `start`, `end`, `pair`, `a`, `b`, `sector`, `bars` |
+| result | `pvalue`, `pvalue_oos`, `pvalue_early`, `pvalue_late`, `beta`, `beta_early`, `beta_late`, `beta_swing`, `hedge_ok`, `half_life`, `half_life_oos`, `net_exposure`, **`survived`** |
+| parameter | `price`, `lags`, `split`, `level`, `holdout`, `min_tail`, `min_abs_beta`, `max_negative_share`, `max_net_exposure`, `min_half_life`, `max_half_life`, `max_beta_swing`, `min_screen_bars`, `require_oos`, `require_link`, `within_sector`, `require_early`, `broker`, `bars_per_night`, `max_overstatement` |
+
+`survived` is recorded **per pair** rather than only counted, which is what turns the file
+from a log into labelled data: a later run can ask which gate value would have changed a
+given verdict without re-screening anything.
+
+It appends rather than overwrites, and `run` joins back to `logs/screens.csv`.
+
+**A warning that belongs with it.** This file makes parameter sweeping easy, and easy is
+the danger. Every distinct parameter set in it is a trial, and the deflated-Sharpe benchmark
+in Step 4 grows with the logarithm of that count. The file is for understanding which gate
+bound a result, not for hunting the cell where something passes — that is the behaviour
+`overfit.py` exists to detect.
+
+## When to reach for the residual track instead
+
+This skill studies **one pair at a time**, and that shape has now been measured to its
+limit: 4,009 pair tests across 22 logged screens, zero survivors. The governing constraint
+is breadth. Information ratio scales as `IC x sqrt(breadth)`, and a single pair trading a
+few dozen times has a breadth of about one, which predicts the Sharpes actually observed.
+
+The SPX screen of 2026-09-17 put a number on why. Across 380 within-sector pairs, 55 were
+cointegrated in the early window and 41 in the late window, with **5 in both against 5.9
+expected under independence**. Knowing a pair was cointegrated early says nothing about
+whether it is cointegrated now.
+
+Use the **factor-residual** skill when the universe is wide enough to support a factor
+model — it produces a signal for every name at once rather than selecting one pair. Stay
+here when the universe is narrow (forex at 15 names, crypto at 18) or when the question is
+genuinely about two named instruments.
+
 Full build plan and what comes after this gate: `development/statarb/plan/PLAN.md`, with
-the per-step splits in `plan/STEP1.md`, `plan/STEP2.md` and `plan/STEP3.md`. Data
-loading, storage and quality: the `marketdata` skill.
+the per-step splits in `plan/STEP1.md`, `plan/STEP2.md` and `plan/STEP3.md`, and the
+redesign in `plan/RESIDUAL.md`. Data loading, storage and quality: the `marketdata` skill.
 
 The half-life and expected move this skill reports are **estimates, not outcomes**. Before
 treating either as an edge, the `sizing` skill measures what the trades actually did: on

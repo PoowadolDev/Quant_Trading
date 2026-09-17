@@ -183,6 +183,11 @@ def build_parser() -> argparse.ArgumentParser:
                           help="how far open/close may sit outside the high/low range before "
                                "it is a violation, in basis points of price so one value "
                                "suits every asset [default: %(default)s]")
+    validate.add_argument("--spike-threshold", type=float, default=0.10,
+                          metavar="FRACTION",
+                          help="single-bar close move, as a fraction, past which a jump "
+                               "that reverses on the next bar is reported as a bad print "
+                               "rather than a market event; 0 disables the check")
     validate.add_argument("--strict", action="store_true",
                           help="treat warnings as failures")
     validate.set_defaults(func=cmd_validate)
@@ -385,6 +390,7 @@ def cmd_validate(args) -> int:
         max_gap_pct=args.max_gap_pct,
         max_stale_run=args.max_stale_run,
         ohlc_tolerance_bps=args.ohlc_tolerance_bps,
+        spike_threshold=(args.spike_threshold if args.spike_threshold > 0 else None),
     )
 
     if args.as_json:

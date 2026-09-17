@@ -291,7 +291,21 @@ def to_source_symbol(inst: Instrument) -> str:
 FX_MAJORS = ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD"]
 FX_CROSSES = ["EURGBP", "EURJPY", "AUDNZD", "GBPJPY", "EURCHF"]
 FX_COMMODITY = ["AUDUSD", "USDCAD", "NZDUSD", "AUDNZD"]
+#: Majors, crosses and the three liquid dollar exotics. The exotics are included
+#: because this project's reframing after `XLP~XLB` was to stop ranking by
+#: statistics and start ranking by how large the spread's move is against the
+#: financing needed to hold it -- and a major deviating 0.3% can never pay for
+#: forty nights of carry, whatever its p-value says.
+FX_WIDE = FX_MAJORS + FX_CROSSES + ["USDMXN", "USDNOK", "USDZAR"]
 CRYPTO_MAJORS = ["BTC-USDT", "ETH-USDT"]
+#: Liquid coins that have traded on Binance under an unchanged ticker since at
+#: least 2019. Deliberate omissions: MATIC (rebranded to POL in 2024, so the
+#: series is two different tickers spliced), LUNA and FTT (both collapsed, and
+#: a dead instrument cannot be traded forward whatever the backtest says).
+CRYPTO_LIQUID = ["BTC-USDT", "ETH-USDT", "BNB-USDT", "XRP-USDT", "ADA-USDT",
+                 "DOGE-USDT", "LTC-USDT", "LINK-USDT", "SOL-USDT", "AVAX-USDT",
+                 "DOT-USDT", "ATOM-USDT", "TRX-USDT", "ETC-USDT", "BCH-USDT",
+                 "XLM-USDT", "UNI-USDT", "FIL-USDT"]
 METALS = ["GOLD", "SILVER", "COPPER"]
 ENERGY = ["WTI", "BRENT"]
 US_INDICES = ["SPX", "NDX", "DJI", "RUT"]
@@ -322,10 +336,20 @@ UNIVERSES: dict[str, dict] = {
         "asset_class": "forex",
         "description": "Commodity currencies, the usual cointegration candidates",
     },
+    "fx-wide": {
+        "symbols": FX_WIDE,
+        "asset_class": "forex",
+        "description": "Majors, crosses and liquid dollar exotics — the widest FX screen",
+    },
     "crypto-majors": {
         "symbols": CRYPTO_MAJORS,
         "asset_class": "crypto",
         "description": "BTC and ETH against USDT",
+    },
+    "crypto-all": {
+        "symbols": CRYPTO_LIQUID,
+        "asset_class": "crypto",
+        "description": "Liquid coins with unbroken Binance history — the crypto pair universe",
     },
     "metals": {
         "symbols": METALS,

@@ -45,6 +45,7 @@ paths.ensure_code_importable()
 
 import costs as cost_model                                        # noqa: E402
 import pair_report as pr                                          # noqa: E402
+import outcomes as oc                                             # noqa: E402
 import strategy as sig                                            # noqa: E402
 import triallog                                                   # noqa: E402
 from deflated_sharpe import sharpe                                # noqa: E402
@@ -198,10 +199,10 @@ def performance_matrix(px, profile, args, log) -> tuple:
     """
     import backtest as bt
 
-    entries = [float(v) for v in args.entry_grid.split(",") if v.strip()]
-    holds = [int(v) for v in args.holding_grid.split(",") if v.strip()]
-    if not entries or not holds:
-        raise UserError("--entry-grid and --holding-grid each need a value")
+    entries = oc.parse_levels(args.entry_grid, "--entry-grid")
+    holds = [int(v) for v in oc.parse_levels(args.holding_grid, "--holding-grid")]
+    if any(h < 1 for h in holds):
+        raise UserError("--holding-grid counts bars, so every value is at least one")
 
     columns, labels = [], []
     for entry_z in entries:

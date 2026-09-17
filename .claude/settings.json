@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PYTHONIOENCODING=utf-8 timeout 1800 python verify_portfolio.py)",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 2400 python verify_portfolio.py -v)",
+      "Bash(grep -nA12 \"^def _row\" pair_report.py)",
+      "Bash(grep -nA8 \"^def bar_chart\" signal_report.py)",
+      "Bash(grep -nA6 \"^def line_chart\" pair_report.py)",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 2400 python pipeline.py --fast)",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 1200 python portfolio.py --book NUE~STLD:equity,HBAN~KEY:equity,ES~WEC:equity,LRCX~MCHP:equity,FIS~FISV:equity --dry-run)"
+    ]
+  }
+}

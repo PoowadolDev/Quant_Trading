@@ -38,6 +38,7 @@ import paths
 paths.ensure_code_importable()
 paths.ensure_marketdata_importable()
 
+import relationship as rel
 import pair_report as pr                                          # noqa: E402
 
 UserError = pr.UserError
@@ -59,6 +60,57 @@ def net_exposure(beta: float) -> float:
         return float("inf")
     gross = 1.0 + abs(beta)
     return abs(1.0 - beta) / gross if gross else float("inf")
+
+
+def currency_legs(symbol: str) -> tuple[str, str] | None:
+    """The base and quote currency of a six-letter forex symbol, or None."""
+    symbol = symbol.upper()
+    if len(symbol) != 6 or not symbol.isalpha():
+        return None
+    return symbol[:3], symbol[3:]
+
+
+def fx_net_exposure(a: str, b: str, beta: float) -> float:
+    """Neutrality of a forex spread measured in currency space, not leg space.
+
+    `net_exposure` assumes both legs are quoted the same way round, which is
+    true of two equities and false of two currency pairs. `AUDUSD` is AUD/USD
+    and `USDNOK` is USD/NOK: the dollar sits on opposite sides, the two rates
+    move oppositely, and the fitted beta comes out negative. The leg weights
+    are then `(1, +|beta|)` -- long both -- and `net_exposure` reports 100%,
+    reading the position as fully directional.
+
+    It is not. Long AUDUSD plus long USDNOK is long AUD, short NOK, and the
+    dollar cancels. Every one of the 28 negative-beta pairs in the 2026-09-18
+    forex screen scored exactly 100% for this reason, which is what a
+    systematic representation error looks like rather than a run of bad pairs.
+
+    So the exposure is summed per currency instead. Holding `(1, -beta)` of two
+    pairs, each long unit of `XXXYYY` is `+1 XXX` and `-1 YYY`, and the
+    neutrality that matters is whether the **shared** currency cancels: the
+    other two are the spread itself and are supposed to be non-zero.
+
+    Falls back to `net_exposure` when the symbols are not forex or share no
+    currency, so a caller can use it unconditionally.
+    """
+    if not math.isfinite(beta):
+        return float("inf")
+    legs_a, legs_b = currency_legs(a), currency_legs(b)
+    if legs_a is None or legs_b is None:
+        return net_exposure(beta)
+    shared = set(legs_a) & set(legs_b)
+    if len(shared) != 1:
+        return net_exposure(beta)
+    ccy = shared.pop()
+
+    # +1 when the currency is the base of the quote, -1 when it is the quote.
+    sign_a = 1.0 if legs_a[0] == ccy else -1.0
+    sign_b = 1.0 if legs_b[0] == ccy else -1.0
+    w_a, w_b = 1.0, -beta
+    gross = abs(w_a) + abs(w_b)
+    if gross == 0:
+        return float("inf")
+    return abs(w_a * sign_a + w_b * sign_b) / gross
 
 
 @dataclass
@@ -96,7 +148,7 @@ def _ou_half_life(spread: np.ndarray) -> float:
 
 def static_beta(y: np.ndarray, x: np.ndarray, split: int) -> np.ndarray:
     """One ratio for the whole sample, fitted in sample only."""
-    beta = float(np.polyfit(x[:split], y[:split], 1)[0])
+    beta, _ = rel.ols_beta(y, x, split=split)
     return np.full(len(y), beta)
 
 
@@ -104,7 +156,8 @@ def rolling_beta(y: np.ndarray, x: np.ndarray, window: int) -> np.ndarray:
     """Refit on a trailing window. The first `window` bars have no estimate."""
     out = np.full(len(y), np.nan)
     for i in range(window, len(y) + 1):
-        out[i - 1] = float(np.polyfit(x[i - window:i], y[i - window:i], 1)[0])
+        beta, _ = rel.ols_beta(y[i - window:i], x[i - window:i])
+        out[i - 1] = beta
     return out
 
 
@@ -129,11 +182,13 @@ def kalman_beta(y: np.ndarray, x: np.ndarray, *, delta: float,
     through = n if fit_through is None else max(60, min(fit_through, n))
     if obs_var is None:
         head_x, head_y = x[:through], y[:through]
-        resid = head_y - np.polyval(np.polyfit(head_x, head_y, 1), head_x)
+        head_beta, head_alpha = rel.ols_beta(head_y, head_x)
+        resid = rel.build_spread(head_y, head_x, head_beta, head_alpha)
         obs_var = float(np.var(resid, ddof=2)) or 1e-8
     state_cov = delta / (1.0 - delta) * np.eye(2)
 
-    state = np.array([float(np.polyfit(x[:60], y[:60], 1)[0]), 0.0])
+    seed_beta, _ = rel.ols_beta(y, x, split=60)
+    state = np.array([seed_beta, 0.0])
     cov = np.eye(2) * 1e-3
     out = np.full(n, np.nan)
     for t in range(n):

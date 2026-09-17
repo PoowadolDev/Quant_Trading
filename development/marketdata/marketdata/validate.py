@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import numpy as np
 import pandas as pd
 
 from .store import ParquetStore, gap_pct
@@ -67,6 +68,7 @@ def validate_frame(
     max_gap_pct: float | None = None,
     max_stale_run: int = 20,
     ohlc_tolerance_bps: float = 0.0,
+    spike_threshold: float | None = 0.10,
     future_tolerance: pd.Timedelta = pd.Timedelta("1D"),
 ) -> SeriesReport:
     """Run every check against one OHLCV frame.
@@ -79,6 +81,11 @@ def validate_frame(
     one setting means the same thing on EURUSD, USDJPY and BTCUSDT alike. It defaults to
     zero: a close above the high is broken data, and Yahoo forex contains such bars. Raise
     it deliberately if you have decided to live with a known-imperfect feed.
+
+    `spike_threshold` is the single-bar log return, as a fraction, past which a
+    move that reverses on the very next bar is reported as a bad print rather
+    than a market event. None disables the check. The default of 0.10 is above
+    anything a liquid pair does in a day without a central bank behind it.
     """
     report = SeriesReport(label=label, rows=len(df))
     add = report.issues.append
@@ -163,7 +170,55 @@ def validate_frame(
                   f"close price is unchanged for {run} consecutive bars "
                   f"(threshold {max_stale_run}) — possible frozen feed"))
 
+    # --- close-series sanity ---------------------------------------------
+    # Everything above this point checks a bar against itself. This checks the
+    # close against its neighbours, which is the only field some consumers read.
+    if spike_threshold is not None and spike_threshold > 0:
+        spikes = _spike_reversions(df["close"], threshold=spike_threshold)
+        if len(spikes):
+            worst = str(spikes[0].date()) if hasattr(spikes[0], "date") else str(spikes[0])
+            add(Issue(ERROR, "close-spike",
+                      f"{len(spikes)} bars belong to a close spike that reverses on the "
+                      f"next bar, at or above {spike_threshold:.0%} (first {worst}) — "
+                      f"a bad print, not a move"))
+
     return report
+
+
+def _spike_reversions(close: pd.Series, *, threshold: float) -> pd.DatetimeIndex:
+    """Bars where the close jumps past `threshold` and undoes it on the next bar.
+
+    A real shock moves the price and leaves it moved: the Swiss National Bank
+    dropped the euro floor on 2015-01-15 and EURCHF never went back. A bad print
+    moves the price and returns it, because only the one bar was wrong. That
+    round trip is the signature, and it is the only reliable way to tell the two
+    apart without an external reference feed.
+
+    This matters more than the OHLC checks above for anything that reads closes
+    alone. A single wrong close is two large returns in opposite directions, and
+    a mean-reversion strategy will read the first as an opportunity and the
+    second as the reversion it predicted -- booking a large fictional profit
+    from a data error.
+
+    Both bars of the pair are returned, because both are unusable: one carries
+    the bad price and the other carries the correction.
+    """
+    clean = close.dropna()
+    if len(clean) < 3:
+        return pd.DatetimeIndex([])
+    returns = np.log(clean.astype(float)).diff()
+    prev, nxt = returns.shift(1), returns
+    # A spike at bar t shows as a large move into t and a large opposite move
+    # out of it, each past the threshold, with the pair very nearly cancelling.
+    spike = (prev.abs() > threshold) & (nxt.abs() > threshold) & (np.sign(prev) != np.sign(nxt))
+    cancels = (prev + nxt).abs() < (prev.abs() * 0.5)
+    hit = spike & cancels
+    flagged = clean.index[hit.fillna(False)]
+    if len(flagged) == 0:
+        return pd.DatetimeIndex([])
+    positions = clean.index.get_indexer(flagged)
+    both = sorted({i for pos in positions for i in (pos - 1, pos) if i >= 0})
+    return clean.index[both]
 
 
 def _price_gap(magnitude: float, df: pd.DataFrame, asset_class: str = "forex") -> str:

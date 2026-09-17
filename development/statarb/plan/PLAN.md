@@ -15,18 +15,71 @@ than on the previous step being finished.
 |---|---|---|
 | — | Data layer (`development/marketdata`) | ✅ forex, crypto, commodity, index — 92 series |
 | **0** | Structure study — is there anything to trade? | ✅ done |
-| 1 | Cost model + backtest engine — split in [STEP1.md](STEP1.md) | ✅ built, 97 checks green |
-| 2 | Relationship engine + health monitor — split in [STEP2.md](STEP2.md) | ✅ built, 89 checks green |
-| 3 | Signal, risk, sizing — split in [STEP3.md](STEP3.md) | ✅ built, 188 checks green |
-| 4 | Validation — split in [STEP4.md](STEP4.md) | ✅ built, 100 checks green |
+| 1 | Cost model + backtest engine — split in [STEP1.md](STEP1.md) | ✅ built, 122 checks green |
+| 2 | Relationship engine + health monitor — split in [STEP2.md](STEP2.md) | ✅ built, 123 checks green |
+| 3 | Signal, risk, sizing — split in [STEP3.md](STEP3.md) | ✅ built and audited, 189 checks green |
+| 4 | Validation — split in [STEP4.md](STEP4.md) | ✅ built and audited, 123 checks green |
 | 5 | Paper execution | ⬜ |
 | 6 | Live, small size | ⬜ |
+| — | **Redesign: residual stat arb** — [RESIDUAL.md](RESIDUAL.md) | ⚠ proposed, nothing built — argues the search design, not the machinery, is the cause of zero survivors |
 | 7 | Port to crypto / equities | ✅ done early — crypto and indices already searched |
 
-**Machinery: finished and verified. Candidates: none.** 547 checks pass across five
-verification suites, and the newest of them has been mutation-tested — twenty deliberate
-defects introduced one at a time, twenty caught. What is missing is not code, it is a
-relationship worth trading.
+**Machinery: finished and verified. Candidates: none from the pair track.** 629 checks pass
+across five verification suites, and the newest of them has been mutation-tested — twenty
+deliberate defects introduced one at a time, twenty caught. What is missing is not code, it
+is a relationship worth trading.
+
+## Stage map — the 24-stage research pipeline, 2026-09-17
+
+Measured against the canonical pipeline rather than against this document's own step
+numbering, because the two do not line up and the gaps only became visible when they were
+compared.
+
+| # | Stage | State | Where |
+|---|---|---|---|
+| 00 | Research specification | ⚠ partial | kill criteria stated in advance in `RESIDUAL.md` §4; no per-study hypothesis record |
+| 01 | Data acquisition | ✅ | `marketdata download`, three feeds |
+| 02 | Data cleaning and quality | ✅ | `marketdata validate`, close-spike and OHLC checks |
+| 03 | Universe definition | ✅ | `instruments.py` — universes, sectors, `driver_groups` |
+| 04 | **Point-in-time data** | ❌ **absent** | nothing. Not previously named anywhere in code or plan |
+| 05 | Exploratory analysis | ✅ | `pair_report.py`, `relationship_report.py` |
+| 06 | Candidate generation | ✅ | `screen.py`, `basket_screen.py`; residual track needs no selection |
+| 07 | Relationship test | ✅ both branches | `cointegration.py` (pair) and `residual.py` (factor) |
+| 08 | Residual / spread construction | ✅ | `relationship.py`, `residual.py` |
+| 09 | Mean-reversion analysis | ✅ | `_fit_ou`, `health.py`, `residual.py` |
+| 10 | Signal construction | ✅ | `strategy.py`, `thresholds.py`, `residual.py` |
+| 11 | **IC / ICIR / decay** | ✅ **built 2026-09-17** | `ic.py`; breadth reuses `risk.effective_bets` |
+| 12 | **Portfolio construction** | ✅ **built 2026-09-17** | `portfolio.py`, OU-derived sizing |
+| 13 | Risk model | ⚠ partial | caps and kill switch in `risk.py`; no forecast covariance model |
+| 14 | Transaction cost model | ✅ | `costs.py`, `feasibility.py` |
+| 15 | Backtest engine | ✅ | `backtest.py`, 122 checks |
+| 16 | In-sample backtest | ⬜ not run for the residual track | engine is pair-shaped; needs a cross-sectional adapter |
+| 17 | Out-of-sample backtest | ⬜ blocked behind 16 | |
+| 18 | Walk-forward validation | ⚠ partial | rolling refit in the measurement; no trade replay |
+| 19 | Robustness and stress | ⚠ partial | parameter sensitivity measured; no systematic suite |
+| 20 | Multiple testing / bias | ✅ strongest | `multiple_testing.py`, `deflated_sharpe.py`, `overfit.py`, `purged_cv.py` |
+| 21 | Final model selection | ⬜ never reached | needs a net result to select on |
+| 22–23 | Paper, production | ⬜ | Steps 5 and 6 below |
+
+`pipeline.py` runs 00 to 21 in one pass and writes the whole map to a single HTML page in
+`studies/pipeline/`. It computes **no overall score**, for the reason `STEP4.md` gives.
+
+### The five gaps, tracked
+
+1. **Point-in-time data (04) — the live one.** The equity panel is every name with 5,000+
+   bars *as of today*, which is a filter on having survived; the SPX screen used *current*
+   index membership over 2006–2026 history. `EQR` sits in the store at 14 bars and `AVB` is
+   similarly truncated, both taken over. The bias inflates positive results, so the
+   zero-survivor screens are conservative under it, but **every IC and lift measured on the
+   residual track is an upper bound**. The shuffled null does not correct for it: the
+   permutation reorders dates and leaves the cross-section intact.
+2. **Risk model (13).** No forecast covariance. Risk is measured on realised residual
+   correlation, which will understate exactly when correlations move.
+3. **Robustness (19).** Regime subsamples and cost sensitivity not run.
+4. **Research specification (00).** Trial counts are reconstructed from `logs/` rather than
+   read off a pre-registered specification.
+5. **Cross-sectional backtest adapter (16).** The blocking item. `backtest.py` replays a
+   two-leg spread; the residual book is 160 positions rebalanced together.
 
 ## Where the search has been
 

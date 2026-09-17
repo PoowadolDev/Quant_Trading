@@ -26,7 +26,7 @@ carries its own.
 | 4 | `verify_relationship.py` | none of the above is trustworthy unverified | ✅ 48 checks green |
 | 5 | `relationship_report.py` | all three gates on one page, so a verdict can be looked at | ✅ built |
 | 6 | `factors.py` | confirms what is already measured; changes no decision | ⬜ deferred |
-| 7 | `relationship.py` | the unifier — worth writing once the others settle | ⬜ deferred |
+| 7 | `relationship.py` | the unifier | ✅ done, 102 checks green |
 
 **Verified in isolation.** The suite passes with `backtest`, `costs`, `strategy` and
 `feasibility` refused at the import hook, so nothing here depends on Step 1. The
@@ -381,5 +381,6 @@ to a candidate this project has found — two gates passed — and retail financ
 4. ✅ `verify_relationship.py` — ground truth, calibration, and the known failures
 5. ✅ `relationship_report.py` — the evidence on one page, in `studies/relationships/`
 6. ⬜ `factors.py` — deferred; it confirms rather than decides
-7. ⬜ `relationship.py` — deferred until the others have settled, then `pair_report.py` is
-   refactored onto it so there is one spread implementation rather than two
+7. ✅ `relationship.py` — built 2026-09-17, and five callers refactored onto it:
+   `pair_report.py`, `hedge.py`, `screen.py`, `basket_screen.py` and `health.py`. 13 new
+   checks in `verify_relationship.py`

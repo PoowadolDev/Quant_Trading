@@ -315,6 +315,10 @@ def test_real_anchors() -> None:
     args = default_args()
     args.store = str(store)
     args.symbols = "AUDUSD,NZDUSD"
+    # Pinned for the reason recorded in verify_relationship.test_real_data: an
+    # anchor measured on real bars is ground truth only for those bars, and
+    # leaving the window open let a later download change the expected answer.
+    args.start, args.end = "2019-01-01", "2026-09-09"
     try:
         prices = pr.load_prices(args)
     except pr.UserError as exc:

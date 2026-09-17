@@ -257,4 +257,9 @@ either side of 5% — so it cannot repeat the over-sizing mistake described abov
   the only step that can say yes.
 
 Related: `statarb` finds candidates, `tradingcosts` prices them, `backtest` measures them,
-`sizing` decides whether and how much to trade them, `marketdata` supplies the bars. Plan and evidence: `development/statarb/plan/STEP2.md`.
+`sizing` decides whether and how much to trade them, `validation` decides whether any of it
+survives the search that found it, `marketdata` supplies the bars.
+
+A p-value from this skill is one test among many whenever it came out of a screen. Sixteen
+pairs survived a 10% false discovery rate out of 1,171; fourteen were gone by the most
+recent window. Plan and evidence: `development/statarb/plan/STEP2.md`.

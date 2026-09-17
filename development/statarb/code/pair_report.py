@@ -32,6 +32,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import relationship as rel
+
 import paths
 
 paths.ensure_marketdata_importable()
@@ -85,8 +87,7 @@ def fit_pair(prices: pd.DataFrame, *, split: int, use_log: bool,
     px = np.log(prices) if use_log else prices
     in_sample = px.iloc[:split]
 
-    beta, alpha = (float(v) for v in np.polyfit(in_sample[b].to_numpy(float),
-                                                in_sample[a].to_numpy(float), 1))
+    beta, alpha = rel.ols_beta(in_sample[a].to_numpy(float), in_sample[b].to_numpy(float))
     spread = px[a] - beta * px[b] - alpha
 
     theta, mu, sigma, regime = _fit_ou(spread.iloc[:split].to_numpy(float))

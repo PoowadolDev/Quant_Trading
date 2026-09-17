@@ -313,6 +313,14 @@ def main(argv=None) -> int:
 
     if not 0 < args.level < 1:
         raise UserError(f"--level {args.level:g} is a probability between 0 and 1")
+    if args.bootstrap < 0:
+        raise UserError(f"--bootstrap {args.bootstrap} is a count of replicates. "
+                        "Use 0 to skip it; a negative number skipped it silently "
+                        "while looking like a request for it.")
+    if args.effective_sample < 2:
+        raise UserError(f"--effective-sample {args.effective_sample} cannot form a "
+                        "correlation matrix. It needs at least two pairs, and "
+                        "below that the estimate was quietly dropped instead.")
 
     frame = read_dump(Path(args.dump))
     p = frame["pvalue"].to_numpy(float)

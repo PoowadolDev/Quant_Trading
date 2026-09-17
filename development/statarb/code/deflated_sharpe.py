@@ -51,6 +51,7 @@ paths.ensure_code_importable()
 
 import costs as cost_model                                        # noqa: E402
 import pair_report as pr                                          # noqa: E402
+import outcomes as oc                                             # noqa: E402
 import strategy as sig                                            # noqa: E402
 import triallog                                                   # noqa: E402
 
@@ -135,8 +136,13 @@ def expected_max_sharpe(trials: int, trial_sd: float) -> float:
 #: reject a null, which is what `multiple_testing.py` corrects for, and not 1,192
 #: Sharpe ratios anyone could have picked. Charging one correction for the other
 #: inflates the benchmark with tests that were never candidates.
-STRATEGY_LOGS = ("backtests", "outcomes", "thresholds", "sizing", "trials",
-                 "deflated_sharpe")
+#: `deflated_sharpe` is deliberately absent from its own list. Running this
+#: script is not trying another strategy configuration — it is measuring the one
+#: already chosen. Counting its own rows made the benchmark climb on every run:
+#: the same pair deflated against 78 trials, then 82, then 83, so asking the
+#: question twice gave two answers and the later one was always harsher. A
+#: measurement must not change what it measures.
+STRATEGY_LOGS = ("backtests", "outcomes", "thresholds", "sizing", "trials")
 
 
 def is_trial_log(path: Path) -> bool:
@@ -307,6 +313,15 @@ def main(argv=None) -> int:
         raise UserError(f"--level {args.level:g} is a probability between 0 and 1")
     if args.trials is not None and args.trials < 1:
         raise UserError(f"--trials {args.trials} is a count of configurations tried")
+    if args.trial_sd is not None and args.trial_sd < 0:
+        # This one fails in the dangerous direction. `expected_max_sharpe`
+        # returns zero for a non-positive spread, so a negative value deflates
+        # against a benchmark of zero — no deflation at all, reported as though
+        # the Sharpe had survived one.
+        raise UserError(f"--trial-sd {args.trial_sd:g} is a standard deviation. "
+                        "A negative value deflates against a benchmark of zero, "
+                        "which is the same as not deflating at all.")
+    sweep_levels = oc.parse_levels(args.sweep, "--sweep")
 
     profile = cost_model.load_profile(Path(args.costs_dir) / f"{args.broker}.json")
     if not profile:
@@ -344,7 +359,7 @@ def main(argv=None) -> int:
     trial_sd = args.trial_sd
     sweep_sharpes = []
     if trial_sd is None:
-        for value in (float(v) for v in args.sweep.split(",") if v.strip()):
+        for value in sweep_levels:
             try:
                 p_i = params_at(value)
             except ValueError:

@@ -15,7 +15,8 @@ whether anything found was real, and it is expected to reject rather than confir
 | 2 | `deflated_sharpe.py` | a Sharpe ratio adjusted for how many things were tried to find it | ✅ built |
 | 3 | `overfit.py` | probability of backtest overfitting, by combinatorially symmetric cross-validation | ✅ built |
 | 4 | `purged_cv.py` | k-fold that does not leak when labels overlap in time | ✅ built |
-| 5 | `verify_validation.py` | none of the above is trustworthy unverified | ✅ 100 checks green |
+| — | `validation_report.py` | all four gates on one page, the way every other step reports | ✅ built |
+| 5 | `verify_validation.py` | none of the above is trustworthy unverified | ✅ 123 checks green |
 | 6 | `track_record.py` | how long paper trading must run before it means anything | ⬜ deferred |
 
 **Step 4 does not need a candidate to be built or verified**, for the same reason Step 3
@@ -219,6 +220,35 @@ was 78 (per-pair dumps counted as trials); a `--plant-leak` flag in `purged_cv.p
 not do what it claimed, because it planted a within-row leak and purging removes cross-fold
 overlap; and purging turning out to be a 0.6% no-op at the default horizon, which the script
 now reports as `NOT TESTED` rather than as `NO LEAKAGE`.
+
+---
+
+## Audited for production, 2026-09-16
+
+See [worklog/2026-09-16-step4-audit.md](../worklog/2026-09-16-step4-audit.md).
+
+Twelve defects found and fixed: one dead import, nine flags that took values they should
+have refused, and two failures in the verification suite itself.
+
+**Two of the nine failed in the direction that flatters a result.**
+`deflated_sharpe --trial-sd -2` exited 0 — a non-positive spread makes the expected maximum
+zero, so the Sharpe was deflated against a benchmark of nothing and reported as having
+survived. `multiple_testing --bootstrap -5` skipped the bootstrap silently and fell back to
+the weaker estimate without saying so.
+
+**The mutation test found two more, both in the tests.** Deleting the negative-horizon guard
+left the run still exiting 2, because it fell through to a different error — the refusal
+checks asserted an exit code and nothing else, so they passed on a broken build. And nothing
+pinned the *value* of the deflation benchmark: dropping a term from the two-quantile blend
+leaves every monotonicity check passing while the benchmark comes out 8% too low, which
+deflates too little.
+
+Both are the same shape as the two found in the Step 3 audit — **a check that passes for a
+reason other than the one it claims**. Four instances across two audits makes it a pattern
+worth watching for rather than bad luck.
+
+19 mutations, 19 caught. The conclusions did not change: `NUE~STLD` still deflates from a
+probabilistic Sharpe of 80.5% to a deflated 3.5%.
 
 ---
 

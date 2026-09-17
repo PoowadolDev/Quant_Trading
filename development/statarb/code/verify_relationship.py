@@ -275,9 +275,19 @@ def test_real_data() -> None:
         skip("stored anchors", "no store")
         return
 
+    # The window is pinned. These anchors are real numbers measured on real
+    # bars, so they are only ground truth for the bars they were measured on --
+    # and with `start=None` they silently tracked whatever the store happened to
+    # hold. Deepening the forex history from 2019 to 2003 on 2026-09-18 moved
+    # three of them and broke the suite, which is a test defect rather than a
+    # code one: an anchor that changes when unrelated data is downloaded is not
+    # anchoring anything.
+    ANCHOR_START, ANCHOR_END = "2019-01-01", "2026-09-09"
+
     def load(a, b, klass="forex"):
         args = types.SimpleNamespace(symbols=f"{a},{b}", asset_class=klass,
-                                     timeframe="1d", source=None, start=None, end=None,
+                                     timeframe="1d", source=None,
+                                     start=ANCHOR_START, end=ANCHOR_END,
                                      price="log", split=0.70, store=str(store))
         return pr.load_prices(args)
 
@@ -296,7 +306,7 @@ def test_real_data() -> None:
           f"p {p_aud:.3f}")
     check("GBPUSD~USDNOK is not cointegrated, though the half-life gate passed it",
           p_gbp > 0.20, f"p {p_gbp:.3f}")
-    check("USDNOK~USDZAR is cointegrated on the full sample", p_nok < 0.05,
+    check("USDNOK~USDZAR is cointegrated over the anchor window", p_nok < 0.05,
           f"p {p_nok:.3f}")
 
     thresholds = dict(max_pvalue=0.05, degraded_pvalue=0.20, min_half_life=2.0,
@@ -505,6 +515,166 @@ def test_neutrality_and_screen() -> None:
                                        beta_late=float("nan")).beta_swing()))
 
 
+def test_unified_hedge_fit() -> None:
+    print("\n8. relationship.py -- the one hedge fit, checked against the raw "
+          "formula it replaced")
+    import relationship as rel
+
+    rng = np.random.default_rng(11)
+    x = rng.standard_normal(400) * 4 + 20
+    y = 0.62 * x + rng.standard_normal(400) * 0.7 + 3.0
+
+    beta_raw, alpha_raw = (float(v) for v in np.polyfit(x, y, 1))
+    beta, alpha = rel.ols_beta(y, x)
+    check("ols_beta matches raw np.polyfit exactly, not approximately",
+          (beta, alpha) == (beta_raw, alpha_raw),
+          f"{(beta, alpha)} against {(beta_raw, alpha_raw)}")
+
+    beta_split_raw = float(np.polyfit(x[:250], y[:250], 1)[0])
+    beta_split, _ = rel.ols_beta(y, x, split=250)
+    check("a split fits only the slice before it, not the whole array",
+          close(beta_split, beta_split_raw, 1e-12))
+    beta_full, _ = rel.ols_beta(y, x)
+    check("a split changes the answer -- fitting less data is not fitting all of it",
+          abs(beta_split - beta_full) > 1e-6,
+          f"split {beta_split:.6f} vs full {beta_full:.6f}")
+
+    spread_raw = y - beta_raw * x - alpha_raw
+    spread = rel.build_spread(y, x, beta, alpha)
+    check("build_spread reproduces the manual residual",
+          np.allclose(spread, spread_raw))
+
+    # The n-leg form must agree with the pair form on one leg, and with a raw
+    # lstsq on several -- two different code paths solving the same equations.
+    w1, a1 = rel.ols_hedge(y, x)
+    check("ols_hedge on one leg matches ols_beta to solver tolerance",
+          close(float(w1[0]), beta_raw, 1e-8) and close(a1, alpha_raw, 1e-8),
+          f"{float(w1[0]):.8f} against {beta_raw:.8f}")
+
+    x3 = rng.standard_normal((400, 3))
+    true_w = np.array([0.4, -0.9, 1.3])
+    y3 = x3 @ true_w + 6.0 + rng.standard_normal(400) * 0.3
+    design = np.column_stack([x3, np.ones(400)])
+    coef_raw, *_ = np.linalg.lstsq(design, y3, rcond=None)
+    w3, a3 = rel.ols_hedge(y3, x3)
+    check("ols_hedge on three legs matches a raw lstsq on the same design",
+          np.allclose(w3, coef_raw[:-1]) and close(a3, float(coef_raw[-1]), 1e-8))
+    check("the fitted weights recover the generating weights, not just the algebra",
+          np.allclose(w3, true_w, atol=0.05),
+          f"{w3} against {true_w}")
+
+    spread3_raw = y3 - x3 @ coef_raw[:-1] - coef_raw[-1]
+    spread3 = rel.build_spread_n(y3, x3, coef_raw[:-1], float(coef_raw[-1]))
+    check("build_spread_n reproduces the manual n-leg residual",
+          np.allclose(spread3, spread3_raw))
+
+    # A caller that swaps y and x must get a materially different fit, not a
+    # silently transposed one that happens to look similar.
+    beta_swapped, _ = rel.ols_beta(x, y)
+    check("swapping the two sides changes the fitted ratio",
+          abs(beta_swapped - beta) > 1e-3,
+          f"swapped {beta_swapped:.4f} against {beta:.4f}")
+
+
+def test_callers_agree_with_relationship() -> None:
+    print("\n9. every refactored caller reproduces its pre-refactor number")
+    import hedge as hg
+    import relationship as rel
+
+    rng = np.random.default_rng(23)
+    x = rng.standard_normal(300) * 2 + 15
+    y = 1.15 * x + rng.standard_normal(300) * 0.4 - 1.0
+    split = 200
+
+    beta_raw = float(np.polyfit(x[:split], y[:split], 1)[0])
+    static = hg.static_beta(y, x, split)
+    check("hedge.static_beta matches the raw np.polyfit it used to call",
+          close(float(static[0]), beta_raw, 1e-9) and
+          bool(np.all(static == static[0])),
+          f"{static[0]:.8f} against {beta_raw:.8f}")
+
+    window = 60
+    roll_raw = np.full(len(y), np.nan)
+    for i in range(window, len(y) + 1):
+        roll_raw[i - 1] = float(np.polyfit(x[i - window:i], y[i - window:i], 1)[0])
+    roll = hg.rolling_beta(y, x, window)
+    check("hedge.rolling_beta matches a hand-rolled raw-polyfit loop",
+          np.allclose(roll[window - 1:], roll_raw[window - 1:], atol=1e-9))
+
+    import basket_screen as bs
+    x2 = np.column_stack([x, rng.standard_normal(300) * 3 + 5])
+    y2 = 0.8 * x2[:, 0] - 0.3 * x2[:, 1] + 2 + rng.standard_normal(300) * 0.2
+    design = np.column_stack([x2, np.ones(300)])
+    coef_raw, *_ = np.linalg.lstsq(design, y2, rcond=None)
+    w, a = bs.fit_weights(y2, x2)
+    check("basket_screen.fit_weights matches a raw lstsq on the same design",
+          np.allclose(w, coef_raw[:-1]) and close(a, float(coef_raw[-1]), 1e-8))
+    spread_raw = y2 - x2 @ coef_raw[:-1] - coef_raw[-1]
+    check("basket_screen.spread_of matches the manual residual",
+          np.allclose(bs.spread_of(y2, x2, w, a), spread_raw))
+
+
+def test_fx_neutrality() -> None:
+    print("\n10. forex neutrality is measured in currency space, not leg space")
+
+    # AUDUSD is AUD/USD and USDNOK is USD/NOK. The dollar is on opposite sides,
+    # so the rates move oppositely, the fitted beta is negative, and the leg
+    # weights are (1, +|beta|) -- long both. Leg-space neutrality calls that
+    # 100% directional. It is not: long AUDUSD plus long USDNOK is long AUD,
+    # short NOK, with the dollar cancelling.
+    for beta in (-0.2, -0.5813, -1.0, -1.1526, -3.0):
+        check(f"opposite-side USD scores exactly 100% in leg space (beta {beta:+.4f})",
+              close(hg.net_exposure(beta), 1.0, 1e-12),
+              f"{hg.net_exposure(beta):.6f}")
+    check("currency space does not, and separates the pairs leg space could not",
+          len({round(hg.fx_net_exposure("AUDUSD", "USDNOK", b), 6)
+               for b in (-0.2, -0.5813, -1.0, -1.1526, -3.0)}) == 5)
+
+    # A beta of exactly -1 holds one unit of each, so the shared dollar cancels
+    # exactly and the position is a pure AUD-against-NOK bet.
+    check("beta of -1 cancels the shared currency exactly",
+          close(hg.fx_net_exposure("AUDUSD", "USDNOK", -1.0), 0.0, 1e-12),
+          f"{hg.fx_net_exposure('AUDUSD', 'USDNOK', -1.0):.8f}")
+
+    # Worked by hand: weights (1, +0.5813); AUDUSD carries -1 USD, USDNOK
+    # carries +0.5813 USD; net 0.4187 over a gross of 1.5813.
+    got = hg.fx_net_exposure("AUDUSD", "USDNOK", -0.5813)
+    check("opposite-side USD matches the hand-computed currency exposure",
+          close(got, 0.4187 / 1.5813, 1e-6), f"{got:.6f} against {0.4187/1.5813:.6f}")
+
+    # Same-side quotes were never broken and must not move.
+    for a, b, beta in (("EURUSD", "GBPUSD", 0.70), ("EURUSD", "AUDUSD", 1.4),
+                       ("EURGBP", "EURJPY", 0.80)):
+        check(f"{a}~{b} is unchanged -- the shared currency is already on one side",
+              close(hg.fx_net_exposure(a, b, beta), hg.net_exposure(beta), 1e-12),
+              f"{hg.fx_net_exposure(a, b, beta):.6f} against {hg.net_exposure(beta):.6f}")
+
+    # Anything that is not a pair of forex symbols falls back untouched, so the
+    # equity and index screens are unaffected by this entirely.
+    for a, b in (("XLP", "XLB"), ("NUE", "STLD"), ("BTC-USDT", "ETH-USDT")):
+        check(f"{a}~{b} falls back to leg space",
+              close(hg.fx_net_exposure(a, b, 0.594), hg.net_exposure(0.594), 1e-12))
+
+    # Two pairs sharing no currency have nothing to cancel.
+    check("EURGBP~USDJPY shares no currency and falls back",
+          close(hg.fx_net_exposure("EURGBP", "USDJPY", 0.5),
+                hg.net_exposure(0.5), 1e-12))
+    check("a non-finite beta is refused in currency space too",
+          not math.isfinite(hg.fx_net_exposure("AUDUSD", "USDNOK", float("nan"))))
+
+    check("currency_legs splits a six-letter symbol",
+          hg.currency_legs("AUDUSD") == ("AUD", "USD"))
+    check("currency_legs refuses anything that is not one",
+          hg.currency_legs("BTC-USDT") is None and hg.currency_legs("XLP") is None)
+
+    # The direction of the correction must be a loosening, never a tightening:
+    # currency space can only ever score at or below leg space for an
+    # opposite-side pair, because leg space is already at its maximum of 1.
+    for beta in (-0.1, -0.9, -2.5):
+        check(f"currency space is no stricter than leg space (beta {beta:+.1f})",
+              hg.fx_net_exposure("AUDUSD", "USDNOK", beta) <= hg.net_exposure(beta) + 1e-12)
+
+
 def main() -> int:
     global VERBOSE
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -514,7 +684,7 @@ def main() -> int:
     ns = parser.parse_args()
     VERBOSE = ns.verbose
 
-    print("Verifying cointegration.py, hedge.py and health.py")
+    print("Verifying cointegration.py, hedge.py, health.py and relationship.py")
     test_ground_truth()
     test_calibration(ns.trials)
     test_hedge()
@@ -522,6 +692,9 @@ def main() -> int:
     test_real_data()
     test_gates_and_inputs()
     test_neutrality_and_screen()
+    test_unified_hedge_fit()
+    test_callers_agree_with_relationship()
+    test_fx_neutrality()
 
     print(f"\n{len(PASSED)} passed, {len(FAILED)} failed, {len(SKIPPED)} skipped")
     if FAILED:

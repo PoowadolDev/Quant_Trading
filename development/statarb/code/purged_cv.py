@@ -57,7 +57,6 @@ import paths
 
 paths.ensure_code_importable()
 
-import costs as cost_model                                        # noqa: E402
 import pair_report as pr                                          # noqa: E402
 import strategy as sig                                            # noqa: E402
 import triallog                                                   # noqa: E402
@@ -247,6 +246,17 @@ def main(argv=None) -> int:
 
     if not 0 <= args.min_retained <= 1:
         raise UserError(f"--min-retained {args.min_retained:g} is a share")
+    if args.horizon is not None and args.horizon < 1:
+        # A negative horizon reversed the forward-return slice and produced an
+        # empty sample, which then reported itself as "too few observations for
+        # six folds" — true, and the wrong explanation.
+        raise UserError(f"--horizon {args.horizon} counts bars ahead, so it is at "
+                        "least one. A negative value emptied the sample and the "
+                        "error then blamed the fold count.")
+    if args.max_holding_bars < 1:
+        raise UserError(f"--max-holding-bars {args.max_holding_bars} counts bars")
+    if args.embargo < 0:
+        raise UserError(f"--embargo {args.embargo} counts bars, not negative ones")
 
     px = pr.load_prices(args)
     pair = " ~ ".join(px.columns)

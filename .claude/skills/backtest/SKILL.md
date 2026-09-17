@@ -24,7 +24,7 @@ Three files in `development/statarb/code`:
 |---|---|
 | `strategy.py` | the decision function. A pure function, and the same one that runs live |
 | `backtest.py` | the replay engine. Walks bars, fills, charges, reports |
-| `verify_backtest.py` | 77 checks that the engine is not lying |
+| `verify_backtest.py` | 122 checks that the engine is not lying |
 
 ## The constraint everything else follows from
 
@@ -92,6 +92,59 @@ A negative **gross** means the signal earned nothing to pay costs with, and no b
 broker rescues it. A positive gross eaten by cost is a different problem with different
 fixes.
 
+### 4a. Then read the risk and profit block
+
+Printed under those lines by default. `--brief` suppresses it; everything in it is also in
+`--json`.
+
+```
+  profit                              risk
+    net                 31.26%         max drawdown         -12.53%
+    per year             1.49%         volatility/year        5.26%
+    gross               35.52%         Calmar                  0.12
+    profit factor         2.10         Sortino                 0.35
+    payoff ratio          1.69         longest underwater   2,813 bars
+    trades/year            2.7         worst losing run         5 trades
+
+    per trade: expectancy +55.8 bps, average win +192.6, average loss -113.8
+    tail:      worst -327.6 bps, worst 5% start -216.9, average beyond it -264.9
+
+    Sharpe 0.28 +/- 0.22 (standard error; on this many observations)
+    mean/standard error +1.32 - the mean is indistinguishable from zero
+    still 495 bars below the previous peak on the last bar of the record
+    all figures are per unit of spread notional, not account equity; sizing.py converts
+```
+
+**Percent and basis points are both shown** so neither has to be taken on faith. 100 bps is
+1%. The engine computes in basis points because that is the unit costs are quoted in;
+percent is there because it is the unit a result is read in.
+
+The three lines at the bottom are the ones that stop the block above being read too kindly.
+
+**`Sharpe 0.28 +/- 0.22`** — the standard error of the Sharpe itself. When it is close to
+the ratio, as here, the Sharpe is not distinguishable from zero and printing it alone
+invites treating it as though it were. Expect a large error on any pair with few trades.
+
+**`mean/standard error +1.32`** — the per-trade mean measured against its own uncertainty.
+Below 2 it says, in as many words, that the mean is indistinguishable from zero. This is
+the same quantity the **sizing** skill haircuts on, shown before the profit rather than
+after it.
+
+**`all figures are per unit of spread notional`** — these are not account returns. A net of
+31% means 31% of the notional put into the spread, at leverage of one, and converting it
+into what an account would have made is `sizing.py`'s job, not this one's.
+
+Two more worth knowing by name. **Calmar** is annual return over the worst drawdown: 0.12
+means twelve and a half percent was risked to earn one and a half. **Longest underwater**
+is the longest unbroken stretch below a previous peak, in bars — 2,813 daily bars is
+eleven years, and a strategy nobody could sit through is not a strategy. When the record
+ends below its peak the block says so on its own line, because a maximum drawdown that has
+never been recovered has not been shown to recover at all.
+
+A high profit factor with a tiny `trades/year` is a warning, not a result: check whether a
+handful of trades carry everything. On `AUDUSD~USDNOK` the top five trades of 73 were 84%
+of all profit, and the single largest was a bad data print.
+
 ### 5. Iterate honestly
 
 Every run appends a row to `logs/backtests.csv`. Threshold tuning is a parameter search and
@@ -154,6 +207,7 @@ reverting.
 | `--trials` | `../logs/backtests.csv` | run log |
 | `--no-trial-log` | off | skip the log |
 | `--bins`, `--max-trade-rows` | `30`, `60` | report detail |
+| `--brief` | off | print only the headline lines, without the risk and profit block |
 | `--bars-per-year` | `252` | annualisation for the Sharpe figure |
 | `--seed` | `0` | for `--signal random` |
 | `--dry-run`, `--json`, `--open`, `-q`, `-v` | | as elsewhere |
@@ -196,13 +250,22 @@ the spread.
 ## Verifying the engine
 
 ```bash
-python verify_backtest.py            # 77 checks, about two minutes
+python verify_backtest.py            # 122 checks, about two minutes
 python verify_backtest.py -v         # print every check
 ```
 
-Twelve groups: accounting identity, zero-cost, null calibration, look-ahead, carry scaling,
-the flat strategy, the signal contract, exit reasons, real data, trade booking, the cost
-profile, and feasibility.
+Fifteen groups: accounting identity, zero-cost, null calibration, look-ahead, carry
+scaling, the flat strategy, the signal contract, exit reasons, real data, trade booking,
+the cost profile, nights per bar, feasibility, the health gate, and the risk and profit
+metrics.
+
+The risk-metric group pins values worked out by hand rather than copied from a previous
+run, and it exists in that form because three of its checks passed a mutation test on the
+first attempt for the wrong reason: the Sharpe standard error was pinned on a constant
+series where the term being tested is zero, the losing-streak check had no scratch trade in
+its sample so `<` and `<=` agreed, and the expected-shortfall check asserted only an
+inequality that still held when the mutation made two quantities equal. All three now pin
+values on data where the term actually bites.
 
 Run it after touching `strategy.py` or `backtest.py`. The suite has already caught, among
 others, a financing debit added to equity as a credit, a flip booked as one trade, and a
@@ -218,6 +281,12 @@ reports.
 - Never write a separate backtest loop, and never let the live bot use a different decision
   function. One code path.
 - Never report a net figure without the gross, cost and carry beside it.
+- Never quote a Sharpe from this engine without its standard error. On a few dozen trades
+  the error is routinely as large as the ratio.
+- Never present a percent from this engine as an account return. It is per unit of spread
+  notional; `sizing.py` converts, and its haircut is usually severe.
+- Never report a profit without checking how few trades produced it. The block prints
+  `trades/year`, `profit factor` and the tail for this reason.
 - Never present a backtest as evidence without the `--signal random` control from the same
   data and costs.
 - Never remove `--stop-z` or `--max-holding-bars` to improve a result.
@@ -232,6 +301,22 @@ the bars. Plan and status: `development/statarb/plan/STEP1.md`.
 
 `--health-gate` hands control of exposure to the **relationship** skill's monitor: flat
 while broken, no new entries while degraded.
+
+A net figure from this engine is not an edge, and it is not evidence either until the
+`validation` skill has charged it for the search that produced it — the same result can
+read as an 80.5% probability of beating zero and a 3.5% probability of beating what the
+search alone would find.
+
+## Thresholds are not the only way to size
+
+Every entry and exit threshold this engine accepts is a **trial**, and the deflated-Sharpe
+benchmark in Step 4 grows with the logarithm of the trial count. Sweeping five entry values
+multiplies the count by five before any of them has earned anything.
+
+The **portfolio** skill sizes without thresholds at all: the position is continuous in the
+fitted Ornstein-Uhlenbeck drift, `w = theta(mu - X)/sigma^2`, so there is no value to
+sweep. That path is currently cross-sectional only and is not yet wired into this engine —
+stage 16 of the **pipeline** skill is exactly that gap.
 
 A net figure from this engine is not an edge. The **sizing** skill takes the same trades
 and asks whether they did what was predicted, whether any entry threshold earned its own

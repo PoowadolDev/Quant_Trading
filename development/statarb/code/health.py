@@ -39,6 +39,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import relationship as rel
+
 import paths
 
 paths.ensure_code_importable()
@@ -79,8 +81,8 @@ def assess(window: pd.DataFrame, *, history_betas: list[float], max_pvalue: floa
     a, b = window.columns
     y = window[a].to_numpy(float)
     x = window[b].to_numpy(float)
-    beta, alpha = (float(v) for v in np.polyfit(x, y, 1))
-    spread = y - beta * x - alpha
+    beta, alpha = rel.ols_beta(y, x)
+    spread = rel.build_spread(y, x, beta, alpha)
 
     ar = float(np.polyfit(spread[:-1], spread[1:], 1)[0])
     half_life = math.log(2) / -math.log(ar) if 0.0 < ar < 1.0 else float("nan")

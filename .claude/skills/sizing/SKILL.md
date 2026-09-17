@@ -311,8 +311,26 @@ cointegration behind it last held in 1996-2000.
 Read that as the shape of the whole problem: a real relationship, a stable hedge ratio, a
 large backtest number, and not enough evidence to put money on it.
 
+## Sizing one relationship against sizing a book
+
+This skill sizes **one** relationship from its own realised trades. Sizing a whole
+cross-section at once is the **portfolio** skill, and the two meet at one function:
+`growth_optimal_leverage(mu, sigma)` is `mu/sigma^2` either way. What differs is where
+`mu` comes from — realised trade outcomes here, the fitted Ornstein-Uhlenbeck drift
+`theta(mu - X)` there.
+
+`portfolio.py` is no longer deferred. `STEP3.md` held it back because it "needs two
+candidates to mean anything, and there are none"; the residual track replaced one pair with
+160 concurrent signals and that reason expired.
+
 Related: `statarb` finds candidates, `relationship` tests them, `tradingcosts` prices them,
-`backtest` measures them, `marketdata` supplies the bars. Plan and evidence:
+`backtest` measures them, `portfolio` combines them into a book, `ic` measures how much
+skill the signal being sized actually carries, `validation` decides whether any of it is
+real, `marketdata` supplies the bars.
+
+A size this skill justifies has not been validated. `validation` deflates the Sharpe behind
+it for the search that found it: `NUE~STLD` goes from a probabilistic Sharpe of 80.5% to a
+deflated 3.5% once charged for seventy-seven trials. Plan and evidence:
 `development/statarb/plan/STEP3.md`, `worklog/2026-09-14-step3.md`,
 `worklog/2026-09-14-crosscheck.md`, `worklog/2026-09-14-step3-audit.md` and
 `worklog/2026-09-15-widen-and-link.md`.

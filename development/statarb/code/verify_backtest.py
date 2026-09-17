@@ -537,6 +537,182 @@ def test_health_gate() -> None:
           f"{same.net_bps:+.4f} against {ungated.net_bps:+.4f}")
 
 
+def test_risk_metrics() -> None:
+    print("\n15. risk and profit metrics — pinned to values, not just direction")
+
+    # A hand-built result whose every metric can be worked out on paper. The
+    # numbers are chosen so each answer is exact and none of them coincide,
+    # because a check that passes for the wrong reason is the defect this suite
+    # has shipped twice before.
+    def trade(net: float) -> bt.Trade:
+        return bt.Trade(entry_bar=0, exit_bar=1, entry_time="", exit_time="",
+                        direction="long spread", entry_z=2.0, exit_z=0.5,
+                        bars_held=1, gross_bps=net, transaction_bps=0.0,
+                        carry_bps=0.0, net_bps=net, exit_reason="target")
+
+    nets = [100.0, -50.0, 200.0, -25.0, -25.0, 50.0]
+    equity = np.cumsum(nets)
+    res = bt.Result(bars=6, trades=[trade(v) for v in nets],
+                    equity_gross=equity.copy(), equity_net=equity.copy(),
+                    position=np.zeros(6), z=np.zeros(6),
+                    gross_bps=float(sum(nets)), transaction_bps=0.0,
+                    carry_bps=0.0, net_bps=float(sum(nets)), exposure_bars=6)
+    net_steps = np.diff(np.concatenate([[0.0], equity]))
+    dd = bt.drawdown(equity)
+    stats = bt.risk_metrics(res, bars_per_year=6.0, net=net_steps, dd=dd, years=1.0)
+
+    # wins 100 + 200 + 50 = 350; losses 50 + 25 + 25 = 100; 350 / 100 = 3.5
+    check("profit factor is gross win over gross loss",
+          close(stats["profit_factor"], 3.5, 1e-12),
+          f"{stats['profit_factor']:.6f} against 3.5")
+
+    # average win 350/3 = 116.666..., average loss -100/3 = -33.333...
+    check("average win and average loss are the per-side means",
+          close(stats["avg_win_bps"], 350.0 / 3.0, 1e-9)
+          and close(stats["avg_loss_bps"], -100.0 / 3.0, 1e-9))
+    check("payoff ratio is average win over average loss",
+          close(stats["payoff_ratio"], 3.5, 1e-9),
+          f"{stats['payoff_ratio']:.6f} against 3.5")
+
+    # -25 then -25 are consecutive; the run of losses is two, not three.
+    check("worst losing run counts consecutive losers only",
+          stats["worst_losing_streak"] == 2,
+          f"{stats['worst_losing_streak']} against 2")
+
+    # A trade that nets exactly zero is not a win, so it continues a losing run
+    # rather than breaking it. Without a scratch trade in the sample the two
+    # comparisons agree and the check cannot tell them apart.
+    scratch = [100.0, -50.0, 0.0, -25.0, 200.0]
+    sc_eq = np.cumsum(scratch)
+    res_sc = bt.Result(bars=5, trades=[trade(v) for v in scratch],
+                       equity_gross=sc_eq.copy(), equity_net=sc_eq.copy(),
+                       position=np.zeros(5), z=np.zeros(5),
+                       gross_bps=225.0, transaction_bps=0.0, carry_bps=0.0,
+                       net_bps=225.0, exposure_bars=5)
+    st_sc = bt.risk_metrics(res_sc, bars_per_year=5.0, net=np.array(scratch),
+                            dd=bt.drawdown(sc_eq), years=1.0)
+    check("a scratch trade continues a losing run rather than breaking it",
+          st_sc["worst_losing_streak"] == 3,
+          f"{st_sc['worst_losing_streak']} against 3")
+    check("a scratch trade does not count as a win",
+          close(st_sc["avg_win_bps"], 150.0, 1e-9),
+          f"{st_sc['avg_win_bps']:.4f} against 150.0")
+
+    check("expectancy is the mean net per trade",
+          close(stats["expectancy_bps"], 250.0 / 6.0, 1e-9))
+    check("best and worst trade are the extremes",
+          close(stats["best_trade_bps"], 200.0, 1e-12)
+          and close(stats["worst_trade_bps"], -50.0, 1e-12))
+
+    # The tail average can never sit above the percentile that defines it, but
+    # that inequality also holds when the two are the same number, so it cannot
+    # tell the mean of the tail from the quantile itself. Both are pinned.
+    # Sorted nets are -50, -25, -25, 50, 100, 200; the fifth percentile by
+    # linear interpolation is -50 + 0.25 * 25 = -43.75, and the only trade at or
+    # below it is -50, so the shortfall is exactly -50.
+    check("the 5% quantile is interpolated across the trade distribution",
+          close(stats["trade_var95_bps"], -43.75, 1e-9),
+          f"{stats['trade_var95_bps']:.6f} against -43.75")
+    check("expected shortfall is the mean beyond the quantile, not the quantile",
+          close(stats["expected_shortfall_bps"], -50.0, 1e-9),
+          f"{stats['expected_shortfall_bps']:.6f} against -50.0")
+    check("expected shortfall is at or below the 5% quantile",
+          stats["expected_shortfall_bps"] <= stats["trade_var95_bps"] + 1e-12)
+
+    # Percent is basis points over one hundred, exactly, with no rounding.
+    check("net percent is net basis points over one hundred",
+          close(stats["net_pct"], res.net_bps / 100.0, 1e-12))
+    check("max drawdown percent matches the drawdown curve",
+          close(stats["max_drawdown_pct"], float(dd.min()) / 100.0, 1e-12))
+
+    # equity 100, 50, 250, 225, 200, 250 against running peaks
+    # 100, 100, 250, 250, 250, 250: underwater at bars 2, 4 and 5 only, so the
+    # longest unbroken run is two, and the record closes at a new high, so
+    # nothing is left unrecovered.
+    longest, trailing = bt.underwater_bars(equity)
+    check("longest underwater run is measured in consecutive bars",
+          longest == 2, f"{longest} against 2")
+    check("a record closing at a new high leaves nothing unrecovered",
+          trailing == 0, f"{trailing} against 0")
+    rising = np.array([1.0, 2.0, 3.0, 4.0])
+    check("a curve at a new high every bar is never underwater",
+          bt.underwater_bars(rising) == (0, 0))
+
+    # Calmar is annual return over the absolute worst drawdown.
+    check("Calmar is annual return over the worst drawdown",
+          close(stats["calmar"], (250.0 / 1.0) / abs(float(dd.min())), 1e-9))
+
+    # The ratio term must be pinned where it is NOT zero. Returns of
+    # +10, -5, +10, -5 have a mean of 2.5 and a sample deviation of 8.660254,
+    # so at four bars a year the Sharpe is 2.5 / 8.660254 * 2 = 0.5773503 and
+    # the error is sqrt((1 + 0.5 * 0.5773503^2) / 4) * 2 = 1.0801234. Dropping
+    # the ratio term gives 1.0 instead, which every check below would miss.
+    swing = np.array([10.0, -5.0, 10.0, -5.0])
+    sw_eq = np.cumsum(swing)
+    res_sw = bt.Result(bars=4, trades=[trade(v) for v in swing],
+                       equity_gross=sw_eq.copy(), equity_net=sw_eq.copy(),
+                       position=np.zeros(4), z=np.zeros(4), gross_bps=10.0,
+                       transaction_bps=0.0, carry_bps=0.0, net_bps=10.0,
+                       exposure_bars=4)
+    st_sw = bt.risk_metrics(res_sw, bars_per_year=4.0, net=swing,
+                            dd=bt.drawdown(sw_eq), years=1.0)
+    check("Sharpe is the annualised mean over deviation",
+          close(st_sw["sharpe"], 0.5773502691896258, 1e-9),
+          f"{st_sw['sharpe']:.10f}")
+    check("Sharpe standard error carries the ratio term, not only one over n",
+          close(st_sw["sharpe_stderr"], 1.0801234497346435, 1e-9),
+          f"{st_sw['sharpe_stderr']:.10f} against 1.0801234497")
+
+    # The standard error of a Sharpe of zero is sqrt(1/n) annualised, which is
+    # the one case that can be written down without the ratio in it.
+    flat = np.array([5.0, 5.0, 5.0, 5.0, 5.0, 5.0])
+    flat_eq = np.cumsum(flat)
+    res2 = bt.Result(bars=6, trades=[trade(5.0) for _ in flat],
+                     equity_gross=flat_eq.copy(), equity_net=flat_eq.copy(),
+                     position=np.zeros(6), z=np.zeros(6), gross_bps=30.0,
+                     transaction_bps=0.0, carry_bps=0.0, net_bps=30.0,
+                     exposure_bars=6)
+    st2 = bt.risk_metrics(res2, bars_per_year=4.0, net=flat,
+                          dd=bt.drawdown(flat_eq), years=1.0)
+    # A constant series has zero deviation, so the Sharpe is zero by the guard
+    # and its error is sqrt((1 + 0) / 6) * sqrt(4).
+    check("Sharpe standard error carries the annualisation and the ratio term",
+          close(st2["sharpe_stderr"], math.sqrt(1.0 / 6.0) * 2.0, 1e-12),
+          f"{st2['sharpe_stderr']:.8f} against {math.sqrt(1.0/6.0)*2.0:.8f}")
+
+    # Ten times the observations must shrink the error by sqrt(10).
+    st3 = bt.risk_metrics(res2, bars_per_year=4.0,
+                          net=np.full(600, 5.0),
+                          dd=bt.drawdown(np.cumsum(np.full(600, 5.0))), years=1.0)
+    check("more observations shrink the Sharpe standard error as one over root n",
+          close(st3["sharpe_stderr"] * math.sqrt(100.0), st2["sharpe_stderr"], 1e-9))
+
+    # A zero-variance mean must not be reported as significant.
+    check("mean over standard error is finite and signed",
+          close(stats["mean_over_stderr"],
+                stats["expectancy_bps"] / stats["mean_stderr_bps"], 1e-9))
+
+    # A losing book must not produce a flattering profit factor.
+    losers = [-10.0, -20.0, -30.0]
+    l_eq = np.cumsum(losers)
+    res4 = bt.Result(bars=3, trades=[trade(v) for v in losers],
+                     equity_gross=l_eq.copy(), equity_net=l_eq.copy(),
+                     position=np.zeros(3), z=np.zeros(3), gross_bps=-60.0,
+                     transaction_bps=0.0, carry_bps=0.0, net_bps=-60.0,
+                     exposure_bars=3)
+    st4 = bt.risk_metrics(res4, bars_per_year=3.0, net=np.array(losers),
+                          dd=bt.drawdown(l_eq), years=1.0)
+    check("a book with no winners has a profit factor of zero",
+          close(st4["profit_factor"], 0.0, 1e-12),
+          f"{st4['profit_factor']}")
+    # equity -10, -30, -60 against peaks -10, -10, -10: underwater from the
+    # second bar to the last, so two bars are unrecovered, not three.
+    check("a book with no winners is underwater to the last bar",
+          st4["unrecovered_bars"] == 2, f"{st4['unrecovered_bars']} against 2")
+    check("a losing book reports a negative net percent",
+          st4["net_pct"] < 0)
+
+
 def main() -> int:
     global VERBOSE
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -558,6 +734,7 @@ def main() -> int:
     test_nights_per_bar()
     test_feasibility()
     test_health_gate()
+    test_risk_metrics()
 
     print(f"\n{len(PASSED)} passed, {len(FAILED)} failed, {len(SKIPPED)} skipped")
     if FAILED:

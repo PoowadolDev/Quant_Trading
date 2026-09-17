@@ -275,6 +275,23 @@ def test_deflated_sharpe() -> None:
     check("a wider spread between trials raises it too",
           ds.expected_max_sharpe(100, 0.6) > ds.expected_max_sharpe(100, 0.3))
     check("the benchmark is never negative", ds.expected_max_sharpe(2, 0.3) >= 0.0)
+    # The value, not just its direction. The expected maximum blends two
+    # quantiles, and dropping the second term leaves every monotonicity check
+    # above still passing while the benchmark comes out 8% too low — which
+    # deflates less and lets more through.
+    check("the expected maximum of 100 trials matches the derived figure",
+          close(ds.expected_max_sharpe(100, 1.0), 2.530603, 1e-5),
+          f"{ds.expected_max_sharpe(100, 1.0):.6f}")
+    check("and of 1,000 trials",
+          close(ds.expected_max_sharpe(1000, 1.0), 3.255122, 1e-5),
+          f"{ds.expected_max_sharpe(1000, 1.0):.6f}")
+    check("it blends two quantiles, so it exceeds the lower one alone",
+          ds.expected_max_sharpe(100, 1.0) > float(__import__("scipy.stats",
+              fromlist=["norm"]).norm.ppf(0.99)),
+          "dropping the second term would fail here")
+    check("it scales linearly with the trial spread",
+          close(ds.expected_max_sharpe(100, 2.0),
+                2.0 * ds.expected_max_sharpe(100, 1.0), 1e-12))
 
     v_few = ds.assess(r, pair="A~B", trials=5, trial_sd=0.3, level=0.05)
     v_many = ds.assess(r, pair="A~B", trials=5000, trial_sd=0.3, level=0.05)
@@ -305,6 +322,16 @@ def test_deflated_sharpe() -> None:
     check("a Sharpe exactly at the benchmark is a coin flip",
           close(ds.probabilistic_sharpe(0.2, 0.2, 500, 0.0, 3.0), 0.5, 1e-9))
 
+    # A measurement must not change what it measures. `deflated_sharpe.csv` was
+    # in its own list of strategy logs, so each run counted itself and the
+    # benchmark climbed: the same pair deflated against 78 trials, then 82, then
+    # 83. Asking the question twice gave two answers.
+    check("deflation does not count its own runs as trials",
+          "deflated_sharpe" not in ds.STRATEGY_LOGS,
+          f"{ds.STRATEGY_LOGS}")
+    check("but it does count the searches that chose the configuration",
+          {"backtests", "thresholds", "outcomes"} <= set(ds.STRATEGY_LOGS))
+
     logs = HERE.parent / "logs"
     dump = logs / "dump-equities.csv"
     if dump.exists():
@@ -314,6 +341,9 @@ def test_deflated_sharpe() -> None:
     if screens.exists():
         check("a screen log is not counted as a strategy trial",
               not ds.is_trial_log(screens))
+    own = logs / "deflated_sharpe.csv"
+    if own.exists():
+        check("and neither is deflation's own log", not ds.is_trial_log(own))
 
 
 # ------------------------------------------------- 6. overfitting
@@ -414,7 +444,77 @@ def test_purging() -> None:
           <= rows_purged)
 
 
-# ------------------------------------------------- 8. what it must not do
+# ------------------------------------------------- 8. what the command line refuses
+def test_inputs_refused() -> None:
+    """Every numeric flag that once took a value it should not have.
+
+    Each case asserts the exit code **and** that the message names the flag.
+    Exit code alone is not enough: two different failures both exit 2, so a
+    removed guard that falls through to a different error looks exactly like
+    the guard working. The mutation test caught this — deleting the
+    negative-horizon guard left the run exiting 2 with the fold count blamed
+    instead, and a code-only check passed.
+    """
+    print("\n8. the numbers the command line refuses")
+    import subprocess
+    import sys as _sys
+
+    equity = ["-s", "NUE,STLD", "-a", "equity", "--broker", "equity"]
+    plain = ["-s", "NUE,STLD", "-a", "equity"]
+    quiet = ["--no-log", "-q"]
+
+    cases = [
+        # A negative trial spread deflates against a benchmark of zero, which is
+        # no deflation at all reported as though the Sharpe had survived one.
+        ("deflated_sharpe.py", equity + ["--trial-sd", "-2"] + quiet, "--trial-sd",
+         "a negative trial spread is refused rather than silently not deflating"),
+        ("deflated_sharpe.py", equity + ["--sweep", "a,b"] + quiet, "--sweep",
+         "a sweep that is not numbers is refused"),
+        ("deflated_sharpe.py", equity + ["--trials", "0"] + quiet, "--trials",
+         "a trial count of zero is refused"),
+        ("deflated_sharpe.py", equity + ["--level", "0"] + quiet, "--level",
+         "a significance level of zero is refused"),
+        ("overfit.py", equity + ["--entry-grid", "x,y"] + quiet, "--entry-grid",
+         "an entry grid that is not numbers is refused"),
+        ("overfit.py", equity + ["--holding-grid", "0"] + quiet, "--holding-grid",
+         "a holding period of zero bars is refused"),
+        ("overfit.py", equity + ["--blocks", "9"] + quiet, "--blocks",
+         "an odd block count is refused"),
+        ("overfit.py", equity + ["--max-pbo", "0"] + quiet, "--max-pbo",
+         "an overfitting limit of zero is refused"),
+        ("purged_cv.py", plain + ["--horizon", "-5"] + quiet, "--horizon",
+         "a negative horizon is named rather than blamed on the fold count"),
+        ("purged_cv.py", plain + ["--embargo", "-5"] + quiet, "--embargo",
+         "a negative embargo is refused"),
+        ("purged_cv.py", plain + ["--min-retained", "3"] + quiet, "--min-retained",
+         "a retained share above one is refused"),
+        ("purged_cv.py", plain + ["--folds", "1"] + quiet, "--folds",
+         "a single fold is refused"),
+    ]
+
+    dump = HERE.parent / "logs" / "dump-fx.csv"
+    if dump.exists():
+        forex = ["--dump", str(dump), "-a", "forex"]
+        cases += [
+            ("multiple_testing.py", forex + ["--bootstrap", "-5"] + quiet,
+             "--bootstrap", "a negative bootstrap count is refused"),
+            ("multiple_testing.py", forex + ["--effective-sample", "0"] + quiet,
+             "--effective-sample", "an empty effective-test sample is refused"),
+            ("multiple_testing.py", forex + ["--level", "0"] + quiet, "--level",
+             "a significance level of zero is refused by the correction too"),
+            ("multiple_testing.py", forex + ["--fdr", "1.5"] + quiet, "--fdr",
+             "a false discovery rate above one is refused"),
+        ]
+
+    for script, argv, names, what in cases:
+        proc = subprocess.run([_sys.executable, str(HERE / script)] + argv,
+                              capture_output=True, text=True, cwd=str(HERE))
+        message = (proc.stderr or proc.stdout).strip()
+        check(what, proc.returncode == 2 and names in message,
+              f"exit {proc.returncode}: {message[:72]}")
+
+
+# ------------------------------------------------- 9. what it must not do
 def test_no_aggregation() -> None:
     print("\n5. the gates stay separate")
     modules = ("multiple_testing", "deflated_sharpe", "overfit", "purged_cv")
@@ -466,6 +566,7 @@ def main() -> int:
     test_deflated_sharpe()
     test_overfit()
     test_purging()
+    test_inputs_refused()
     test_no_aggregation()
 
     print(f"\n{len(PASSED)} passed, {len(FAILED)} failed, {len(SKIPPED)} skipped")

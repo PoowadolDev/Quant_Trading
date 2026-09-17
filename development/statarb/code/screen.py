@@ -43,7 +43,8 @@ paths.ensure_marketdata_importable()
 
 import cointegration as ci                                        # noqa: E402
 import hedge as hg                                                # noqa: E402
-import pair_report as pr                                          # noqa: E402
+import pair_report as pr
+import relationship as rel                                          # noqa: E402
 from marketdata import UNIVERSES                                  # noqa: E402
 from marketdata.instruments import (EQUITY_SECTOR_OF,              # noqa: E402
                                     shared_drivers)
@@ -133,7 +134,7 @@ def _window(y: np.ndarray, x: np.ndarray, lags, min_bars: int) -> tuple:
     if len(y) < min_bars:
         return float("nan"), float("nan")
     p = ci.engle_granger(y, x, trend="c", lags=lags).pvalue
-    beta = float(np.polyfit(x, y, 1)[0])
+    beta, _ = rel.ols_beta(y, x)
     return p, beta
 
 
@@ -169,11 +170,16 @@ def evaluate(a: str, b: str, args) -> Row:
     p_late, beta_late = _window(y_all[hi:], x_all[hi:], args.lags, args.min_tail)
 
     est = hg.evaluate("static", hg.static_beta(y, x, split), y, x, split)
+    # Forex neutrality is measured in currency space: see `hg.fx_net_exposure`.
+    # For every other asset class this returns the ordinary leg-space figure.
+    net = hg.fx_net_exposure(a, b, est.beta_final)
     return Row(a=a, b=b, bars=len(y), pvalue=p, pvalue_oos=p_oos,
                beta=est.beta_final,
-               hedge_ok=est.usable(args.min_abs_beta, args.max_negative_share,
-                                   args.max_net_exposure),
-               net_exposure=est.net_exposure(),
+               hedge_ok=(est.usable(args.min_abs_beta, args.max_negative_share,
+                                    args.max_net_exposure)
+                         or (net <= args.max_net_exposure
+                             and abs(est.beta_final) >= args.min_abs_beta)),
+               net_exposure=net,
                half_life=est.half_life_is, half_life_oos=est.half_life_oos,
                sector=EQUITY_SECTOR_OF.get(a, "") if
                EQUITY_SECTOR_OF.get(a) == EQUITY_SECTOR_OF.get(b) else "",
@@ -330,6 +336,91 @@ def resolve_universe(args) -> list[str]:
     return [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
 
 
+#: Every gate and structural choice a screen makes, recorded beside each pair it judged.
+#:
+#: The existing `--dump` carries results without parameters and `logs/screens.csv` carries
+#: parameters without per-pair results, so neither can answer "which threshold would have
+#: changed this pair's verdict". Keeping both halves in one row is what makes the file a
+#: parameter surface rather than an archive.
+#:
+#: Order matters and is fixed: identity, then result, then the inputs. A reader scanning
+#: left to right meets the pair, what happened to it, and only then why.
+RESEARCH_PARAMS = (
+    "price", "lags", "split", "level", "holdout", "min_tail",
+    "min_abs_beta", "max_negative_share", "max_net_exposure",
+    "min_half_life", "max_half_life", "max_beta_swing", "min_screen_bars",
+    "require_oos", "require_link", "within_sector", "require_early",
+    "broker", "bars_per_night", "max_overstatement",
+)
+
+
+def append_research_log(path: Path, args, tested: list, passed: list) -> int:
+    """One row per pair tested, with the parameters that produced the verdict.
+
+    Appended rather than overwritten, because the point is the accumulated surface across
+    runs. The run number ties a block of rows back to `logs/screens.csv`, so the two files
+    join on it.
+
+    `survived` is recorded per pair rather than only counted, which is the column a future
+    optimisation actually needs: it turns the file into labelled data instead of a log.
+    """
+    survivors = {r.pair for r in passed}
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    existing, runs = 0, 0
+    if path.exists() and path.stat().st_size:
+        with path.open(newline="", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            header = reader.fieldnames or []
+            seen = set()
+            for line in reader:
+                existing += 1
+                seen.add(line.get("run", ""))
+            runs = len(seen)
+        if header and header[0] != "run":
+            raise UserError(f"{path} was written by an older version; rename it to keep "
+                            "the history and a fresh log will start")
+
+    rows = []
+    for r in tested:
+        row = {"run": runs + 1, "run_utc": stamp,
+               "universe": args.universe or "custom",
+               "asset_class": args.asset_class, "timeframe": args.timeframe,
+               "start": args.start or "", "end": args.end or "",
+               "pair": r.pair, "a": r.a, "b": r.b, "sector": r.sector, "bars": r.bars,
+               "pvalue": _round(r.pvalue), "pvalue_oos": _round(r.pvalue_oos),
+               "pvalue_early": _round(r.pvalue_early), "pvalue_late": _round(r.pvalue_late),
+               "beta": _round(r.beta), "beta_early": _round(r.beta_early),
+               "beta_late": _round(r.beta_late), "beta_swing": _round(r.beta_swing()),
+               "hedge_ok": "yes" if r.hedge_ok else "no",
+               "half_life": _round(r.half_life), "half_life_oos": _round(r.half_life_oos),
+               "net_exposure": _round(r.net_exposure),
+               "survived": "yes" if r.pair in survivors else "no"}
+        for name in RESEARCH_PARAMS:
+            value = getattr(args, name, "")
+            row[name] = "" if value is None else value
+        rows.append(row)
+
+    if not rows:
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not path.exists() or path.stat().st_size == 0
+    with path.open("a", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        if write_header:
+            writer.writeheader()
+        writer.writerows(rows)
+    return len(rows)
+
+
+def _round(value, places: int = 6):
+    """Blank rather than `nan`, so a spreadsheet reads the column as empty not as text."""
+    try:
+        return round(float(value), places) if math.isfinite(float(value)) else ""
+    except (TypeError, ValueError):
+        return ""
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="screen", description=__doc__.splitlines()[0],
                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -407,6 +498,12 @@ def build_parser() -> argparse.ArgumentParser:
     out.add_argument("--log", default=str(DEFAULT_LOG))
     out.add_argument("--no-log", action="store_true")
     out.add_argument("--show", type=int, default=15, help="rows printed")
+    out.add_argument("--research-log", default=str(paths.LOGS / "pair_research.csv"),
+                     metavar="PATH",
+                     help="append one row per pair tested, carrying both the result and "
+                          "every gate value that produced it, so a later optimisation can "
+                          "read the parameter surface without re-running the screen")
+    out.add_argument("--no-research-log", action="store_true")
     out.add_argument("--dump", default=None, metavar="PATH",
                      help="write one row per pair, with every p-value, so the "
                           "multiple-testing correction can be computed without "
@@ -540,6 +637,10 @@ def main(argv=None) -> int:
             for r in rows:
                 writer.writerow(asdict(r))
         log(f"  {len(rows)} row(s) dumped to {dump.resolve()}")
+
+    if not args.no_research_log:
+        written = append_research_log(Path(args.research_log), args, rows, passed)
+        log(f"  {written} row(s) appended to {Path(args.research_log).resolve()}")
 
     if args.json:
         print(json.dumps({"universe": args.universe, "pairs": len(rows),

@@ -31,7 +31,7 @@ with one set of parameters, and the row in `logs/` that points at it.
 | What happened in step 1? | [worklog/step1-summary.html](worklog/step1-summary.html) |
 | Is this pair worth trading? | `code/pair_report.py` |
 | Does it survive costs and financing? | `code/feasibility.py` |
-| What would it have earned? | `code/backtest.py` |
+| What would it have earned, and at what risk? | `code/backtest.py` |
 | Did the trades do what was predicted? | `code/outcomes.py` |
 | Where can it be entered at all? | `code/thresholds.py` |
 | How many bets does this book hold? | `code/risk.py` |
@@ -40,6 +40,8 @@ with one set of parameters, and the row in `logs/` that points at it.
 | Is this Sharpe worth the search behind it? | `code/deflated_sharpe.py` |
 | Was the winning parameter chosen, or lucky? | `code/overfit.py` |
 | Does the score survive purging? | `code/purged_cv.py` |
+| All four validation gates, on one page | `code/validation_report.py` |
+| Does a basket of three or more cointegrate? | `code/basket_screen.py` |
 | All three, on one page | `code/signal_report.py` |
 
 ## Running
@@ -63,10 +65,20 @@ python risk.py --book XLP~XLB:index,ALL~TRV:equity        # how many bets is thi
 python sizing.py -s XLP,XLB -a index --broker etf --net   # how much should be held?
 python signal_report.py -s XLP,XLB -a index --broker etf  # all three, on one page
 
+python basket_screen.py -a crypto -t 1d --broker binance   # named baskets, n legs
+
+python screen.py -u equities --within-sector --dump ../logs/dump-equities.csv
+python multiple_testing.py --dump ../logs/dump-equities.csv -a equity --bootstrap 25
+python deflated_sharpe.py -s NUE,STLD -a equity --broker equity
+python overfit.py -s NUE,STLD -a equity --broker equity
+python purged_cv.py -s NUE,STLD -a equity --horizon 400 --folds 8
+python validation_report.py -s NUE,STLD -a equity --broker equity  # all four
+
 python verify_pair_report.py                              # 72 checks
-python verify_backtest.py                                 # 97 checks
-python verify_relationship.py                             # 89 checks
-python verify_signal.py                                   # 188 checks
+python verify_backtest.py                                 # 122 checks
+python verify_relationship.py                             # 123 checks
+python verify_signal.py                                   # 189 checks
+python verify_validation.py                               # 123 checks
 ```
 
 Every script takes `--help`, `--dry-run` and `--json`. Parameters are typed by hand
@@ -78,14 +90,14 @@ honest count of them.
 | Step | What | State |
 |---|---|---|
 | 0 | Structure study | ✅ done |
-| 1 | Cost model and backtest engine | ✅ built, 97 checks green |
-| 2 | Relationship engine and health monitor | ✅ built, 89 checks green |
-| 3 | Signal, risk, sizing | ✅ built, 188 checks green |
-| 4 | Validation | ✅ built, 100 checks green |
+| 1 | Cost model and backtest engine | ✅ built, 122 checks green |
+| 2 | Relationship engine and health monitor | ✅ built, 123 checks green |
+| 3 | Signal, risk, sizing | ✅ built and audited, 189 checks green |
+| 4 | Validation | ✅ built and audited, 123 checks green |
 | 5–6 | Paper, live | ⬜ |
 | 7 | Other asset classes | ✅ done early — crypto, commodities and indices searched |
 
-**The machinery is finished and verified. There is no candidate.** Around 850 pair studies
+**The machinery is finished and verified. There is no candidate.** Around 1,300 pair studies
 across forex, crypto, commodities, equity indices and individual equities at daily,
 four-hour, hourly and one-minute bars; none survives every gate. `XLP~XLB` and `ALL~TRV` came closest and
 were both rejected on 2026-09-14, when the decades of history neither had been fitted on

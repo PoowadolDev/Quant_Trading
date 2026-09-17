@@ -20,7 +20,7 @@ run by hand from the command line, in the same style as Step 1 and Step 2.
 | 5 | `verify_signal.py` | none of the above is trustworthy unverified | ✅ 185 checks green |
 | — | `signal_report.py` | all three questions on one page, the way every other step reports | ✅ built |
 | — | `triallog.py` | the CSV schema guard, extracted so there is one copy of it | ✅ built |
-| 6 | `portfolio.py` | needs two candidates to mean anything, and there are none | ⬜ deferred |
+| 6 | `portfolio.py` | 160 concurrent residual signals; the deferral reason expired | ✅ built 2026-09-17 |
 
 **Built and verified 2026-09-14.** 185 checks in `verify_signal.py`, bringing the project
 to **418 across four suites**. The suite was then mutation-tested: fifteen deliberate
@@ -225,11 +225,64 @@ The checks that matter most:
 **Verified in isolation**, with `backtest`, `costs` and `strategy` refused at the import
 hook, so the dependency runs one way only.
 
-## 6. `portfolio.py` — deferred, with the reason
+## 6. `portfolio.py` — built 2026-09-17, OU-derived
 
-Combining relationships into a book needs at least two relationships. There are none. Built
-now it would be tested on a book of one, which tests nothing. It comes back when `risk.py`
-has more than one thing to hold.
+**The deferral reason expired.** It read: "Combining relationships into a book needs at
+least two relationships. There are none." The residual track replaced one pair with a
+cross-section of 160 concurrent signals, so `risk.py` now has plenty to hold.
+
+Sizing is derived from the fitted process rather than searched on a grid:
+
+```
+dX      = theta(mu - X)dt + sigma dB
+drift_i = theta_i(mu_i - X_i,t)
+w_i     = drift_i / sigma_i^2
+```
+
+That last line is `sizing.growth_optimal_leverage` with the OU drift supplying the mean —
+Kelly sizing and OU sizing are the same arithmetic reached from two directions, so the
+script calls `sizing.py` rather than keeping a second copy of the formula.
+
+**What it buys.** Every swept threshold was a trial and the deflation benchmark grows with
+the log of the trial count. There is no threshold left to sweep.
+
+**What it costs.** One free parameter exchanged for three estimated ones. An overstated
+`theta` oversizes with nothing to cap it, so the uncertainty haircut from
+`sizing.lower_bound_mean` and the heavy-loading gate are both mandatory, not optional.
+
+**What was measured while building it.** Net over gross scales as `1/sqrt(N)` — independent
+drifts cancel, and the cancellation improves with the square root of the cross-section. At
+160 names that predicts 7.9% and the measured standard deviation across eleven formation
+dates is 7.8%, mean +1.8%. The `--max-net 0.10` default therefore sits at about 1.3
+standard deviations and is a calibrated number rather than a guess.
+
+**It is also the allocator `risk.py` says is not its job.** `risk.book_equity` carries the
+comment *"Equal weights because sizing is `sizing.py`'s job and guessing at it here would
+make the drawdown a statement about weights nobody chose"*, and `sizing.py` sizes one pair
+against the full equity in isolation from every other. Nothing turned several relationships
+into capital shares until this script did. `--book A~B:class,...` reuses `risk.parse_book`
+and `risk.load_book`, so the grammar and the rolling hedge refit have one implementation.
+
+**Two things the build measured that were not obvious.**
+
+*Factor neutrality had to become algebraic.* The book was neutral only because independent
+drifts cancelled, which made net over gross scale as `1/sqrt(N)` — fine on average, +47% on
+one date. Projecting the weights onto the null space of the loadings (RESIDUAL.md §2.2)
+makes factor exposure exactly zero: net on the last bar fell from +47.4% to +8.2%, the
+standard deviation across twelve dates from 7.8% to 3.6%, and cap breaches from about one
+date in five to none. The cap itself was not moved. The projection must run only over names
+the gates already allow — unrestricted it reopened 70 gated names into a book of 160,
+silently removing the heavy-loading gate.
+
+*A fitted half-life is not evidence of reversion.* The OU fit calls a series reverting
+whenever its AR(1) coefficient lands in (0, 1), and on a few hundred points a random walk
+does so as a matter of course. Six pure random walks came back `reverting` every time and
+two were sized. Pair mode therefore applies a unit-root test; the residual cross-section
+deliberately does not, because per-name significance is the question §1.4 of RESIDUAL.md
+says a portfolio strategy is not asked — applied there it admitted 8% of names and produced
+no book.
+
+Verified by `verify_portfolio.py` — 70 checks, nine groups, six mutations caught.
 
 ---
 
