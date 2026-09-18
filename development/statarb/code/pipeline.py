@@ -53,6 +53,7 @@ import ic                                                          # noqa: E402
 import pair_report as pr                                           # noqa: E402
 import portfolio as pf                                             # noqa: E402
 import residual as rs                                              # noqa: E402
+import scorecard as sc                                             # noqa: E402
 import risk                                                        # noqa: E402
 from signal_report import EXTRA_CSS                                # noqa: E402
 
@@ -60,6 +61,14 @@ UserError = pr.UserError
 DEFAULT_REPORTS = paths.STUDIES / "pipeline"
 
 PASS, FAIL, PARTIAL, ABSENT, NOT_RUN = "pass", "fail", "partial", "absent", "not run"
+
+#: A stage whose inputs make its number meaningless. Distinct from NOT_RUN, which means the
+#: work was not attempted, and from FAIL, which is a verdict about the strategy. The
+#: precedent is `pair_report.judge()`, which refuses to score the edge gate on a
+#: non-stationary spread because doing so "produces a large, convincing and entirely
+#: spurious number". Running every stage must not mean computing numbers that cannot mean
+#: anything, and a stage that cannot be evaluated has to say so rather than report a zero.
+NOT_EVALUABLE = "not evaluable"
 
 #: Only these two states are a judgement about the strategy. The rest are statements about
 #: the pipeline, and mixing them would let an unbuilt stage read as a passing one.
@@ -84,11 +93,72 @@ class Stage:
                 FAIL: "<span class='b no'>FAIL</span>",
                 PARTIAL: "<span class='b no'>PARTIAL</span>",
                 ABSENT: "<span class='b no'>NOT IMPLEMENTED</span>",
-                NOT_RUN: "<span class='b no'>NOT RUN</span>"}[self.state]
+                NOT_RUN: "<span class='b no'>NOT RUN</span>",
+                NOT_EVALUABLE: "<span class='b no'>NOT EVALUABLE</span>"}[self.state]
 
 
 def row(label, value, status=None, note=""):
     return (label, str(value), status, note)
+
+
+#: What each tier means, in one line, for the pipeline page. The wording matters: these are
+#: statements about whether a failure is *fixable*, not about whether a candidate is good.
+TIER_NOTES = {
+    sc.STANDALONE: "cleared every gate it could be asked",
+    sc.PORTFOLIO_CANDIDATE: "failed only on magnitude; a book may fix it",
+    sc.WATCH_POWER: "right sign, error bars too wide; more data may fix it",
+    sc.REJECT_STATISTICAL: "no relationship on the window that selected it",
+    sc.REJECT_STRUCTURAL: "the relationship is not reliably present; nothing fixes it",
+    sc.REJECT_ECONOMIC: "gross positive, costs exceed it; a book cannot dilute a per-trade cost",
+}
+
+
+def tier_counts() -> dict:
+    """Tier distribution across every pair ever screened, from the research log.
+
+    Read rather than recomputed: the log already carries every measurement and every
+    threshold that judged it, so re-screening to produce this would be paying twice for an
+    answer already on disk.
+    """
+    path = paths.LOGS / "pair_research.csv"
+    if not path.exists():
+        return {}
+    import screen as scr
+
+    def number(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float("nan")
+
+    counts: dict = {}
+    with path.open(newline="", encoding="utf-8") as fh:
+        for line in csv.DictReader(fh):
+            try:
+                judged = argparse.Namespace(
+                    level=number(line["level"]), require_oos=True, require_holdout=True,
+                    require_early=False, max_beta_swing=number(line["max_beta_swing"]),
+                    max_net_exposure=number(line["max_net_exposure"]),
+                    min_half_life=number(line["min_half_life"]),
+                    max_half_life=number(line["max_half_life"]))
+                candidate = scr.Row(
+                    a=line["a"], b=line["b"], bars=int(line["bars"]),
+                    pvalue=number(line["pvalue"]), pvalue_oos=number(line["pvalue_oos"]),
+                    beta=number(line["beta"]), hedge_ok=line["hedge_ok"] == "yes",
+                    half_life=number(line["half_life"]),
+                    half_life_oos=number(line["half_life_oos"]),
+                    net_exposure=number(line["net_exposure"]), sector=line["sector"],
+                    pvalue_early=number(line["pvalue_early"]),
+                    pvalue_late=number(line["pvalue_late"]),
+                    beta_early=number(line["beta_early"]),
+                    beta_late=number(line["beta_late"]))
+                name = sc.tier(sc.assess(candidate, judged))
+            except (KeyError, ValueError, AssertionError):
+                # A row written by an older schema, or a gate the tier rules do not cover.
+                # Skipped rather than guessed at; the count is of what could be graded.
+                continue
+            counts[name] = counts.get(name, 0) + 1
+    return counts
 
 
 # ------------------------------------------------------------------ the stages
@@ -176,16 +246,39 @@ def stage_data(store: Path, panel: pd.DataFrame, args) -> list:
 
 def stage_model(panel: pd.DataFrame, returns: np.ndarray, args) -> list:
     """06 to 10 — the factor model, the residual, and the signal built on it."""
+    graded = tier_counts()
     candidates = Stage("06", "Candidate generation", PASS,
                        "Every name carries a signal, so there is nothing to select")
     candidates.rows = [
-        row("Pair track", "4,009 tests, 0 survivors", False,
-            "screen.py, 22 logged screens"),
         row("Residual track", f"{panel.shape[1]} concurrent signals", True,
             "no selection step, so no selection bias from it"),
         row("Selection burden removed", "yes", True,
             "the cross-section is taken whole rather than ranked"),
     ]
+    if graded:
+        # The pair track graded rather than counted. A binary survivor count answers "how
+        # many passed" and discards "how many failed on something a book could fix", which
+        # is a different question and the one worth asking before abandoning a market.
+        total = sum(graded.values())
+        candidates.rows.append(
+            row("Pair track, graded", f"{total:,} tested", None,
+                "logs/pair_research.csv, scorecard.tier"))
+        for name in sc.TIERS:
+            if graded.get(name):
+                candidates.rows.append(
+                    row(f"  {name}", f"{graded[name]:,}",
+                        True if name == sc.STANDALONE else None,
+                        TIER_NOTES.get(name, "")))
+        candidates.note = (
+            "A tier is not a score: no arithmetic combines the gates, and the label comes "
+            "from which gates failed rather than from how many. PORTFOLIO_CANDIDATE means "
+            "the only failures were about magnitude, which a book can plausibly fix by "
+            "holding offsetting exposures — it does not mean the candidate is good. Five "
+            "were measured against the book on 2026-09-18 and none improved its Sharpe.")
+    else:
+        candidates.rows.append(
+            row("Pair track", "no graded research log", None,
+                "run screen.py to populate logs/pair_research.csv"))
 
     window = returns[-args.pca_window:]
     usable, weights = rs.eigenportfolios(window, args.factors)

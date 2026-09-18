@@ -43,6 +43,7 @@ import paths
 paths.ensure_code_importable()
 paths.ensure_marketdata_importable()
 
+import relationship as rel                                     # noqa: E402
 import pair_report as pr                                          # noqa: E402
 
 UserError = pr.UserError
@@ -188,8 +189,7 @@ def run_tests(px: pd.DataFrame, args) -> tuple[list[TestResult], float]:
     if not isinstance(lags, int) and lags not in ("aic", "bic", "t-stat"):
         raise UserError(f"--lags takes aic, bic, t-stat or an integer, not {args.lags!r}")
     lp = np.log(px) if args.price == "log" else px
-    beta, alpha = (float(v) for v in np.polyfit(lp[b].to_numpy(float),
-                                                lp[a].to_numpy(float), 1))
+    beta, alpha = rel.ols_beta(lp[a].to_numpy(float), lp[b].to_numpy(float))
     spread = (lp[a] - beta * lp[b] - alpha).to_numpy(float)
 
     results: list[TestResult] = []

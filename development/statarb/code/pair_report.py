@@ -220,130 +220,17 @@ def judge(fit: PairFit, *, min_hl: float, max_hl: float, min_edge: float) -> Ver
 
 
 # ---------------------------------------------------------------- svg charts
-W, H, PAD_L, PAD_T, PAD_B = 900, 210, 54, 12, 22
-PAD_R = 12
-PAD_R_LABELS = 64
-
-
-def _grid_and_ticks(index, sx, sy, ylo, yhi, pad_r, decimals, sign):
-    out = []
-    for frac in (0, 0.25, 0.5, 0.75, 1.0):
-        value = ylo + (yhi - ylo) * frac
-        y = sy(value)
-        text = f"{value:+.{decimals}f}" if sign else f"{value:.{decimals}f}"
-        out.append(f"<line class='grid' x1='{PAD_L}' y1='{y:.1f}' x2='{W-pad_r}' y2='{y:.1f}'/>")
-        out.append(f"<text class='tick' x='{PAD_L-6}' y='{y+3:.1f}' text-anchor='end'>{text}</text>")
-    n = len(index)
-    fmt = _date_format(index)
-    for frac in (0, 0.25, 0.5, 0.75, 1.0):
-        i = int(frac * (n - 1))
-        out.append(f"<text class='tick' x='{sx(i):.1f}' y='{H-6}' text-anchor='middle'>"
-                   f"{index[i].strftime(fmt)}</text>")
-    return "".join(out)
-
-
-def _date_format(index) -> str:
-    """Tick format that changes with the span, so intraday ticks stay distinct."""
-    days = (index[-1] - index[0]).total_seconds() / 86400
-    if days > 400:
-        return "%Y-%m"
-    if days > 5:
-        return "%Y-%m-%d"
-    return "%m-%d %H:%M"
-
-
-def _scales(n, values, pad_r):
-    ylo, yhi = float(np.nanmin(values)), float(np.nanmax(values))
-    if yhi == ylo:
-        yhi = ylo + 1e-9
-    pad = (yhi - ylo) * 0.08
-    ylo, yhi = ylo - pad, yhi + pad
-    sx = lambda i: PAD_L + i / max(n - 1, 1) * (W - PAD_L - pad_r)          # noqa: E731
-    sy = lambda v: PAD_T + (yhi - v) / (yhi - ylo) * (H - PAD_T - PAD_B)    # noqa: E731
-    return sx, sy, ylo, yhi
-
-
-def _path(values, sx, sy):
-    parts, pen = [], False
-    for i, v in enumerate(values):
-        if not np.isfinite(v):
-            pen = False
-            continue
-        parts.append(("L" if pen else "M") + f"{sx(i):.1f},{sy(v):.1f}")
-        pen = True
-    return "".join(parts)
-
-
-def _split_marker(sx, split):
-    x = sx(split)
-    return (f"<line class='split' x1='{x:.1f}' y1='{PAD_T}' x2='{x:.1f}' y2='{H-PAD_B}'/>"
-            f"<text class='tick' x='{x+5:.1f}' y='{PAD_T+11}'>out-of-sample →</text>")
-
-
-def line_chart(index, series: dict[str, np.ndarray], *, bands=None, hlines=(),
-               split=None, decimals=4, sign=False, end_labels=False,
-               legend_notes=None) -> str:
-    """One panel, one line per entry in `series`, up to six lines."""
-    pad_r = PAD_R_LABELS if end_labels else PAD_R
-    stacked = [np.asarray(v, float) for v in series.values()]
-    span = np.concatenate(stacked)
-    if bands:
-        span = np.concatenate([span, np.asarray(bands, float)])
-    if hlines:
-        span = np.concatenate([span, np.asarray([h for h, _ in hlines], float)])
-    sx, sy, ylo, yhi = _scales(len(index), span, pad_r)
-
-    body = [_grid_and_ticks(index, sx, sy, ylo, yhi, pad_r, decimals, sign)]
-    if bands:
-        lo, hi = min(bands), max(bands)
-        body.append(f"<rect class='band' x='{PAD_L}' y='{sy(hi):.1f}' "
-                    f"width='{W-PAD_L-pad_r}' height='{max(sy(lo)-sy(hi), 0):.1f}'/>")
-    for value, cls in hlines:
-        body.append(f"<line class='{cls}' x1='{PAD_L}' y1='{sy(value):.1f}' "
-                    f"x2='{W-pad_r}' y2='{sy(value):.1f}'/>")
-    if split is not None:
-        body.append(_split_marker(sx, split))
-    for i, values in enumerate(stacked):
-        body.append(f"<path class='s{i}' d='{_path(values, sx, sy)}'/>")
-        if end_labels:
-            last = values[np.isfinite(values)][-1]
-            body.append(f"<text class='end s{i}' x='{W-pad_r+5}' y='{sy(last)+3:.1f}'>"
-                        f"{last:.{decimals}f}</text>")
-
-    keys = []
-    for i, name in enumerate(series):
-        note = ""
-        if legend_notes and name in legend_notes:
-            note = f"<span class='px'>{html.escape(legend_notes[name])}</span>"
-        keys.append(f"<span class='key'><i class='s{i}'></i>{html.escape(name)}{note}</span>")
-    legend = " ".join(keys) if len(series) > 1 or legend_notes else ""
-
-    return (f"<div class='chart'><svg viewBox='0 0 {W} {H}' preserveAspectRatio='none'>"
-            f"{''.join(body)}</svg>"
-            + (f"<div class='legend'>{legend}</div>" if legend else "") + "</div>")
-
-
-def histogram(values: np.ndarray, marks=(), bins: int = 45) -> str:
-    values = values[np.isfinite(values)]
-    counts, edges = np.histogram(values, bins=bins)
-    height = 150
-    tallest = counts.max() or 1
-    bar_w = (W - PAD_L - PAD_R) / bins
-    body = []
-    for i, count in enumerate(counts):
-        bar_h = count / tallest * (height - 24)
-        body.append(f"<rect class='bar' x='{PAD_L + i*bar_w:.1f}' y='{height-12-bar_h:.1f}' "
-                    f"width='{bar_w*0.86:.1f}' height='{bar_h:.1f}'/>")
-    lo, hi = float(edges[0]), float(edges[-1])
-    for value, cls in marks:
-        x = PAD_L + (value - lo) / (hi - lo) * (W - PAD_L - PAD_R)
-        body.append(f"<line class='{cls}' x1='{x:.1f}' y1='6' x2='{x:.1f}' y2='{height-12}'/>")
-    for frac in (0, 0.5, 1.0):
-        x = PAD_L + frac * (W - PAD_L - PAD_R)
-        body.append(f"<text class='tick' x='{x:.1f}' y='{height-1}' text-anchor='middle'>"
-                    f"{lo + (hi-lo)*frac:.1f}</text>")
-    return (f"<div class='chart'><svg viewBox='0 0 {W} {height}' preserveAspectRatio='none'>"
-            f"{''.join(body)}</svg></div>")
+# ---------------------------------------------------------------- shared report style
+#
+# The charts, the CSS and the table row used to live here, which made a module named for one
+# strategy family the hard dependency of every report in the project. They now live in
+# `report_style.py` and are re-exported so the twenty-one existing importers keep working
+# unchanged while the reports are consolidated into one.
+from report_style import (                                          # noqa: E402,F401
+    W, H, PAD_L, PAD_T, PAD_B, PAD_R, PAD_R_LABELS,
+    _grid_and_ticks, line_chart, histogram, bar_chart, waterfall_chart,
+    state_timeline, CSS, EXTRA_CSS, _row,
+)
 
 
 def price_series(prices: pd.DataFrame):
@@ -368,69 +255,6 @@ def price_series(prices: pd.DataFrame):
 
 
 # ---------------------------------------------------------------- html
-CSS = """
-:root{--bg:#fff;--fg:#1b1f24;--muted:#6b7280;--line:#e3e6ea;--zebra:#fafbfc;
---ok:#1a7f37;--no:#cf222e;--a:#2f6feb;--b:#d1913c;--c:#1a7f37;--d:#8250df;--e:#bf3989;--f:#0f7c8a;
---band:#2f6feb;--grid:#eceff2}
-@media(prefers-color-scheme:dark){:root{--bg:#0f1419;--fg:#dfe3e8;--muted:#8b949e;--line:#262c34;
---zebra:#131920;--ok:#3fb950;--no:#f85149;--a:#6ba0ff;--b:#e3b341;--c:#3fb950;--d:#bc8cff;
---e:#f778ba;--f:#39c5cf;--band:#6ba0ff;--grid:#1d242c}}
-*{box-sizing:border-box}
-body{margin:0;padding:26px 30px 60px;background:var(--bg);color:var(--fg);
-font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-h1{font-size:19px;margin:0 0 2px}
-.meta{color:var(--muted);font-size:12px;margin-bottom:18px}
-.verdict{border:1px solid var(--line);border-left:4px solid var(--no);border-radius:6px;
-padding:12px 16px;margin-bottom:22px;background:var(--zebra)}
-.verdict.pass{border-left-color:var(--ok)}
-.verdict b{font-size:16px;color:var(--no)}.verdict.pass b{color:var(--ok)}
-.verdict p{margin:4px 0 0;color:var(--muted);font-size:13px}
-h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);
-margin:26px 0 8px;padding-bottom:5px;border-bottom:1px solid var(--line)}
-.cols{display:flex;gap:26px;flex-wrap:wrap}.cols>div{flex:1 1 340px}
-table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
-td,th{padding:4px 8px;border-bottom:1px solid var(--line);font-size:12.5px;text-align:left}
-td.k{color:var(--muted);white-space:nowrap}
-td.v{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
-td.n{color:var(--muted);font-size:11.5px}
-tbody tr:nth-child(even){background:var(--zebra)}
-.b{font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:3px}
-.b.ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent)}
-.b.no{color:var(--no);background:color-mix(in srgb,var(--no) 14%,transparent)}
-.chart{border:1px solid var(--line);border-radius:6px;padding:6px 4px 2px;margin-bottom:6px;
-background:var(--bg)}
-svg{width:100%;height:auto;display:block}
-path{fill:none;stroke-width:1.3;vector-effect:non-scaling-stroke}
-path.s0{stroke:var(--a)}path.s1{stroke:var(--b)}path.s2{stroke:var(--c)}
-path.s3{stroke:var(--d)}path.s4{stroke:var(--e)}path.s5{stroke:var(--f)}
-text.end{font-size:9.5px;font-family:ui-monospace,Menlo,monospace}
-text.end.s0{fill:var(--a)}text.end.s1{fill:var(--b)}text.end.s2{fill:var(--c)}
-text.end.s3{fill:var(--d)}text.end.s4{fill:var(--e)}text.end.s5{fill:var(--f)}
-line.grid{stroke:var(--grid);stroke-width:1;vector-effect:non-scaling-stroke}
-line.mean{stroke:var(--muted);stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
-line.entry{stroke:var(--no);stroke-dasharray:3 3;vector-effect:non-scaling-stroke}
-line.exit{stroke:var(--ok);stroke-dasharray:2 4;vector-effect:non-scaling-stroke}
-line.split{stroke:var(--muted);stroke-dasharray:2 3;vector-effect:non-scaling-stroke}
-rect.band{fill:var(--band);opacity:.07}rect.bar{fill:var(--a);opacity:.75}
-text.tick{fill:var(--muted);font-size:9px;font-family:ui-monospace,Menlo,monospace}
-.legend{font-size:11px;color:var(--muted);padding:2px 0 4px 54px}
-.key{margin-right:14px}
-.key i{display:inline-block;width:10px;height:2px;margin-right:5px;vertical-align:middle}
-.key i.s0{background:var(--a)}.key i.s1{background:var(--b)}.key i.s2{background:var(--c)}
-.key i.s3{background:var(--d)}.key i.s4{background:var(--e)}.key i.s5{background:var(--f)}
-.key .px{margin-left:5px;opacity:.7;font-family:ui-monospace,Menlo,monospace;font-size:10px}
-.cap{color:var(--muted);font-size:11.5px;margin:2px 0 14px}
-"""
-
-
-def _row(label, value, status=None, note=""):
-    badge = ""
-    if status is True:
-        badge = "<span class='b ok'>PASS</span>"
-    elif status is False:
-        badge = "<span class='b no'>FAIL</span>"
-    return (f"<tr><td class='k'>{html.escape(label)}</td><td class='v'>{html.escape(value)}</td>"
-            f"<td>{badge}</td><td class='n'>{html.escape(note)}</td></tr>")
 
 
 def build_html(prices, fit: PairFit, verdict: Verdict, args, spread, z, split, trial) -> str:

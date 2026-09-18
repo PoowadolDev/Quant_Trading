@@ -7,7 +7,16 @@
       "Bash(grep -nA8 \"^def bar_chart\" signal_report.py)",
       "Bash(grep -nA6 \"^def line_chart\" pair_report.py)",
       "Bash(PYTHONIOENCODING=utf-8 timeout 2400 python pipeline.py --fast)",
-      "Bash(PYTHONIOENCODING=utf-8 timeout 1200 python portfolio.py --book NUE~STLD:equity,HBAN~KEY:equity,ES~WEC:equity,LRCX~MCHP:equity,FIS~FISV:equity --dry-run)"
+      "Bash(PYTHONIOENCODING=utf-8 timeout 1200 python portfolio.py --book NUE~STLD:equity,HBAN~KEY:equity,ES~WEC:equity,LRCX~MCHP:equity,FIS~FISV:equity --dry-run)",
+      "Bash(PYTHONIOENCODING=utf-8 python -c \"import ast,io; ast.parse\\(io.open\\('screen.py',encoding='utf-8'\\).read\\(\\)\\); print\\('parses ok'\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 900 python verify_scorecard.py)",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 900 python -)",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 2400 python -)",
+      "Bash(cd /d/Repository/Quant_Trading/development/statarb/plan && ls -la *.md && echo \"=== plan-mode file \\(outside repo\\) ===\" && ls -la \"C:/Users/poowa/.claude/plans/\" 2>/dev/null && echo \"=== head of the scorecard plan ===\" && head -5 \"C:/Users/poowa/.claude/plans/fizzy-mapping-hejlsberg.md\")",
+      "Read(//c/Users/poowa/.claude/plans/**)",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 1800 python verify_backtest.py)",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 900 python backtest.py -s NUE,STLD -a equity --broker equity --brief --no-trial-log)",
+      "Bash(python -)"
     ]
   }
 }

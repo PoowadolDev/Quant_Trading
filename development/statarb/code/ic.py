@@ -108,8 +108,7 @@ def formation(returns: np.ndarray, end: int, pca_window: int, signal_window: int
     window = returns[end - pca_window:end]
     usable, weights = rs.eigenportfolios(window, n_factors)
 
-    design = np.column_stack([window[:, usable] @ weights, np.ones(len(window))])
-    loadings, *_ = np.linalg.lstsq(design, window, rcond=None)
+    design, loadings = rs.fit_loadings(window, usable, weights)
 
     # The signal is the residual as it stands at the formation date, scaled by its own
     # variation over the window it was accumulated on. Sign is negative because a residual

@@ -27,6 +27,7 @@ sys.path.insert(0, str(HERE))
 
 import backtest as bt                                             # noqa: E402
 import costs as cost_model                                        # noqa: E402
+import pair_report as pr                                          # noqa: E402
 import strategy as sig                                            # noqa: E402
 
 PASSED, FAILED, SKIPPED = [], [], []
@@ -713,6 +714,70 @@ def test_risk_metrics() -> None:
           st4["net_pct"] < 0)
 
 
+def test_sigma_eq_agreement() -> None:
+    """The equilibrium deviation is computed twice, by two different algebraic routes.
+
+    `pair_report._fit_ou` builds it as `resid_sd * sqrt(-2*ln(a)/(1-a^2))` and then divides
+    by `sqrt(2*theta)`; `strategy.fit_relationship` builds it directly as
+    `resid_sd / sqrt(1-ar^2)`. Substituting `theta = -ln(a)` shows the two are the same
+    expression, but they live in two modules with no shared helper, and until this check
+    existed nothing compared them.
+
+    That matters more than a tidiness complaint. `sigma_eq` is the denominator of every
+    z-score the strategy trades on and the multiplier in every expected-move figure the
+    project has published — `feasibility`, `outcomes` and `pair_report` all compute
+    `(entry_z - exit_z) * sigma_eq`. `relationship.py` exists because the hedge fit written
+    eight times produced three separate "two copies disagreed" defects; this is the same
+    pattern in the one quantity where a disagreement would be hardest to notice, because
+    both routes return a plausible number.
+
+    Measured across the AR range when this check was added: worst relative disagreement
+    2.0e-16, which is machine epsilon. They agree today. This check is what makes that a
+    fact rather than an assumption.
+    """
+    print("\n13. the two routes to sigma_eq agree")
+
+    worst = 0.0
+    for phi in (0.05, 0.2, 0.5, 0.7, 0.9, 0.95, 0.99):
+        rng = np.random.default_rng(int(phi * 1000))
+        series = np.zeros(4000)
+        for t in range(1, len(series)):
+            series[t] = phi * series[t - 1] + rng.normal(0, 0.01)
+
+        theta, _mu, sigma, _regime = pr._fit_ou(series)
+        by_fit_ou = sigma / math.sqrt(2 * theta) if theta > 0 else float("nan")
+
+        s0, s1 = series[:-1], series[1:]
+        ar, const = (float(v) for v in np.polyfit(s0, s1, 1))
+        resid_sd = float(np.std(s1 - (ar * s0 + const), ddof=2))
+        by_strategy = resid_sd / math.sqrt(1 - ar ** 2)
+
+        relative = abs(by_fit_ou - by_strategy) / abs(by_strategy)
+        worst = max(worst, relative)
+        check(f"the two routes agree at phi = {phi}", relative < 1e-9,
+              f"{by_fit_ou:.12f} against {by_strategy:.12f}")
+
+    check("the worst disagreement across the AR range is at machine precision",
+          worst < 1e-12, f"{worst:.3e}")
+
+    # And the route strategy.py actually takes, through its own public function, must match
+    # too -- the check above recomputes the formula, this one calls the real thing.
+    rng = np.random.default_rng(99)
+    n = 1500
+    log_b = np.cumsum(rng.normal(0, 0.01, n)) + math.log(50.0)
+    spread = np.zeros(n)
+    for t in range(1, n):
+        spread[t] = 0.85 * spread[t - 1] + rng.normal(0, 0.01)
+    frame = pd.DataFrame({"AAA": np.exp(0.8 * log_b + spread), "BBB": np.exp(log_b)},
+                         index=pd.date_range("2020-01-01", periods=n, freq="D", tz="UTC"))
+    fit = sig.fit_relationship(frame, use_log=True, at=n - 1)
+    built = np.log(frame["AAA"]).to_numpy() - fit.beta * np.log(frame["BBB"]).to_numpy() - fit.alpha
+    theta, _mu, sigma, _regime = pr._fit_ou(built)
+    check("fit_relationship's sigma_eq matches _fit_ou on the spread it built",
+          close(fit.sigma_eq, sigma / math.sqrt(2 * theta), 1e-9),
+          f"{fit.sigma_eq:.10f} against {sigma / math.sqrt(2 * theta):.10f}")
+
+
 def main() -> int:
     global VERBOSE
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -735,6 +800,7 @@ def main() -> int:
     test_feasibility()
     test_health_gate()
     test_risk_metrics()
+    test_sigma_eq_agreement()
 
     print(f"\n{len(PASSED)} passed, {len(FAILED)} failed, {len(SKIPPED)} skipped")
     if FAILED:

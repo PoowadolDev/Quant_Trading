@@ -44,6 +44,7 @@ paths.ensure_marketdata_importable()
 import cointegration as ci                                        # noqa: E402
 import hedge as hg                                                # noqa: E402
 import pair_report as pr
+import scorecard
 import relationship as rel                                          # noqa: E402
 from marketdata import UNIVERSES                                  # noqa: E402
 from marketdata.instruments import (EQUITY_SECTOR_OF,              # noqa: E402
@@ -188,19 +189,26 @@ def evaluate(a: str, b: str, args) -> Row:
 
 
 def survives(r: Row, args) -> bool:
-    if not (r.pvalue < args.level):
-        return False
-    if args.require_oos and not (r.pvalue_oos < args.level):
-        return False
-    if args.require_holdout and not r.holds_out_of_window(
-            args.level, require_early=args.require_early):
-        return False
-    if math.isfinite(args.max_beta_swing) and not (r.beta_swing() <= args.max_beta_swing):
-        return False
-    if not r.hedge_ok:
-        return False
-    return (math.isfinite(r.half_life)
-            and args.min_half_life <= r.half_life <= args.max_half_life)
+    """Did this pair clear every gate?
+
+    Kept as a boolean because the funnel counts and the exit code are boolean questions.
+    It now delegates to `scorecard.assess`, which evaluates every gate rather than
+    stopping at the first failure, so the verdict and the reasons come from one place and
+    cannot disagree. The old short-circuit is gone; the answer it produced is not.
+    """
+    return scorecard.assess(r, args).all_pass()
+
+
+def grade(r: Row, args, *, economics: str | None = None) -> tuple:
+    """The full scorecard and the tier that follows from it.
+
+    A pair that fails one gate is not the same as a pair that fails all of them, and it is
+    not the same as a pair that could not be tested. `survives` collapses those into one
+    `False`; this keeps them apart so a later pass can ask which rejections a book might
+    fix and which are final.
+    """
+    card = scorecard.assess(r, args)
+    return card, scorecard.tier(card, economics=economics)
 
 
 def confirm_with_trades(rows: list, args, log) -> list:

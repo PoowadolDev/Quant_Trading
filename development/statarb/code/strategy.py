@@ -21,6 +21,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, replace
 
+import relationship as rel
 import numpy as np
 import pandas as pd
 
@@ -112,7 +113,10 @@ def fit_relationship(prices: pd.DataFrame, *, use_log: bool, at: int) -> Fit | N
     y = px[a].to_numpy(float)
     if not (np.isfinite(x).all() and np.isfinite(y).all()):
         return None
-    beta, alpha = (float(v) for v in np.polyfit(x, y, 1))
+    # Through the unifier rather than a ninth copy of polyfit. `relationship.py` exists
+    # because this same fit written eight times produced three "two copies disagreed"
+    # defects, and this module is the one the backtest and every live decision run through.
+    beta, alpha = rel.ols_beta(y, x)
     spread = y - beta * x - alpha
     s0, s1 = spread[:-1], spread[1:]
     ar, const = (float(v) for v in np.polyfit(s0, s1, 1))

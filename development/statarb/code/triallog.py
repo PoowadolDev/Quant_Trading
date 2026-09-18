@@ -24,6 +24,40 @@ def stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def register(path: Path, campaign: str, trials: int, description: str) -> int:
+    """Record that `trials` tests are about to be run, before running them.
+
+    `append` records what happened. This records what is *about* to happen, and the
+    difference is the whole point: a trial count reconstructed after a winner is found is
+    a count of the tests somebody remembered, and the ones abandoned half way through are
+    exactly the ones that inflate the search.
+
+    Every distinct parameter set, universe variant and second-chance assessment is a trial.
+    A candidate re-examined for whether it improves a book has been given a second
+    opportunity to look good, and the deflated-Sharpe benchmark grows with the logarithm of
+    how many opportunities were taken. Registering before the fact is what keeps that
+    honest when the assessment finds nothing and nobody would have thought to log it.
+
+    Returns the cumulative registered trial count across the whole file.
+    """
+    if trials < 0:
+        raise ValueError("a campaign cannot register a negative number of trials")
+
+    path = Path(path)
+    row = {"run": 0, "run_utc": stamp(), "campaign": campaign,
+           "trials": int(trials), "description": description}
+    run = append(path, row)
+
+    total = 0
+    with path.open(newline="", encoding="utf-8") as fh:
+        for line in csv.DictReader(fh):
+            try:
+                total += int(line["trials"])
+            except (KeyError, TypeError, ValueError):
+                continue
+    return total
+
+
 def append(path: Path, row: dict) -> int:
     """Add one row, returning its run number.
 

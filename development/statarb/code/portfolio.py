@@ -245,8 +245,7 @@ def fit_positions(returns: np.ndarray, names: list, end: int, args) -> list:
     """
     window = returns[end - args.pca_window:end]
     usable, weights = rs.eigenportfolios(window, args.factors)
-    design = np.column_stack([window[:, usable] @ weights, np.ones(len(window))])
-    loadings, *_ = np.linalg.lstsq(design, window, rcond=None)
+    design, loadings = rs.fit_loadings(window, usable, weights)
 
     tail = slice(len(window) - args.signal_window, len(window))
     accumulated = np.cumsum(window[tail] - design[tail] @ loadings, axis=0)

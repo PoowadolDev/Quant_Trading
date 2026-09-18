@@ -160,6 +160,27 @@ def eigenportfolios(window: np.ndarray, n_factors: int) -> tuple[np.ndarray, np.
     return usable, top / sd[usable][:, None]
 
 
+def fit_loadings(window: np.ndarray, usable: np.ndarray,
+                 weights: np.ndarray) -> tuple:
+    """Factor returns for a window and the loading of every name on them.
+
+    Two lines, written three times — here, in `ic.formation` and in
+    `portfolio.fit_positions` — byte for byte. `relationship.py` exists because the hedge
+    fit written eight times produced three defects where the copies quietly disagreed, and
+    the residual track was busy reproducing the pattern in its own core calculation.
+
+    The intercept column is part of the design on purpose: without it the loadings absorb
+    each name's mean return, and the residual then carries a drift that the OU fit reads as
+    a level rather than as the trend it is.
+
+    Returns `(design, loadings)` rather than just the loadings, because every caller needs
+    the design again to subtract the fitted part.
+    """
+    design = np.column_stack([window[:, usable] @ weights, np.ones(len(window))])
+    loadings, *_ = np.linalg.lstsq(design, window, rcond=None)
+    return design, loadings
+
+
 def forward_residuals(returns: np.ndarray, end: int, pca_window: int,
                       ou_window: int, n_factors: int) -> np.ndarray:
     """Residual returns over the bars *after* the window the model was fitted on.
@@ -173,8 +194,7 @@ def forward_residuals(returns: np.ndarray, end: int, pca_window: int,
     window = returns[end - pca_window:end]
     usable, weights = eigenportfolios(window, n_factors)
 
-    design = np.column_stack([window[:, usable] @ weights, np.ones(len(window))])
-    loadings, *_ = np.linalg.lstsq(design, window, rcond=None)
+    design, loadings = fit_loadings(window, usable, weights)
 
     forward = returns[end:end + ou_window]
     forward_design = np.column_stack([forward[:, usable] @ weights,
